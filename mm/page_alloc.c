@@ -73,6 +73,14 @@
 static DEFINE_MUTEX(pcp_batch_high_lock);
 #define MIN_PERCPU_PAGELIST_FRACTION	(8)
 
+/*ADD*/
+/*由于page_is_NVM使用位置在定义位置之前，所以先声明*/
+unsigned int page_is_NVM(struct page* page);
+
+/*show_buddy_info_test()使用前先声明*/
+void show_buddy_info_test();
+/*end ADD*/
+
 #ifdef CONFIG_USE_PERCPU_NUMA_NODE_ID
 DEFINE_PER_CPU(int, numa_node);
 EXPORT_PER_CPU_SYMBOL(numa_node);
@@ -613,6 +621,9 @@ static inline void rmv_page_order(struct page *page)
 }
 
 /*
+     判断该page是不是属于buddy伙伴系统，是否空闲；
+	 空闲，返回1；否则，返回0
+
  * This function checks whether a page is free && is the buddy
  * we can do coalesce a page and its buddy if
  * (a) the buddy is not in a hole &&
@@ -630,6 +641,7 @@ static inline void rmv_page_order(struct page *page)
 static inline int page_is_buddy(struct page *page, struct page *buddy,
 							unsigned int order)
 {
+	//page对应的页框号是否有效
 	if (!pfn_valid_within(page_to_pfn(buddy)))
 		return 0;
 
@@ -642,12 +654,14 @@ static inline int page_is_buddy(struct page *page, struct page *buddy,
 		return 1;
 	}
 
+	//buddy这个页是否设置了PG_buddy标志；并且分配阶是否相同
 	if (PageBuddy(buddy) && page_order(buddy) == order) {
 		/*
 		 * zone check is done late to avoid uselessly
 		 * calculating zone/node ids for pages that could
 		 * never merge.
 		 */
+		 //是否属于同一个内存域zone
 		if (page_zone_id(page) != page_zone_id(buddy))
 			return 0;
 
@@ -659,6 +673,7 @@ static inline int page_is_buddy(struct page *page, struct page *buddy,
 }
 
 /*
+ * 伙伴系统释放page的重要函数
  * Freeing function for a buddy system allocator.
  *
  * The concept of a buddy system is to maintain direct-mapped table
@@ -693,7 +708,11 @@ static inline void __free_one_page(struct page *page,
 	unsigned long uninitialized_var(buddy_idx);
 	struct page *buddy;
 	unsigned int max_order;
-
+	
+	/*ADD*/
+	unsigned int result;  //该page是何种页面类型（DRAM or NVM）
+	/*end ADD*/
+	
 	max_order = min_t(unsigned int, MAX_ORDER, pageblock_order + 1);
 
 	VM_BUG_ON(!zone_is_initialized(zone));
@@ -703,17 +722,34 @@ static inline void __free_one_page(struct page *page,
 	if (likely(!is_migrate_isolate(migratetype)))
 		__mod_zone_freepage_state(zone, 1 << order, migratetype);
 
-	page_idx = pfn & ((1 << MAX_ORDER) - 1);
+	page_idx = pfn & ((1 << MAX_ORDER) - 1);  //pfn == page_idx,只是长度不同
 
 	VM_BUG_ON_PAGE(page_idx & ((1 << order) - 1), page);
 	VM_BUG_ON_PAGE(bad_range(zone, page), page);
 
 continue_merging:
+	/*只要阶数小于MAX_ORDER-1就有合并的机会；是一个递归的过程，直到找不到伙伴块为止*/
 	while (order < max_order - 1) {
+		/* 找到page所处块对应的伙伴块（第一个page） */
 		buddy_idx = __find_buddy_index(page_idx, order);
 		buddy = page + (buddy_idx - page_idx);
-		if (!page_is_buddy(page, buddy, order))
+		
+		/*ADD*/
+		result = page_is_NVM(page); //page起始的块的页面类型
+		/*end ADD*/
+		
+		/*if (!page_is_buddy(page, buddy, order))
 			goto done_merging;
+		*/
+		/*ADD*/
+		/*如果伙伴块不是空闲的,且伙伴块和原块的页面类型不同，则不执行下面的合并操作
+		||：两种情况有任何一种不符合就不可以合并
+		*/
+		if ((!page_is_buddy(page, buddy, order)) || (result != page_is_NVM(buddy)))
+			goto done_merging;
+
+		/*end ADD*/
+		
 		/*
 		 * Our buddy is free or it is CONFIG_DEBUG_PAGEALLOC guard page,
 		 * merge with it and move up one order.
@@ -721,14 +757,26 @@ continue_merging:
 		if (page_is_guard(buddy)) {
 			clear_page_guard(zone, buddy, order, migratetype);
 		} else {
-			list_del(&buddy->lru);
-			zone->free_area[order].nr_free--;
+			list_del(&buddy->lru);   /*将伙伴块从块链表中删除*/
+			
+			/*ADD*/
+			if(result){  //NVM页面
+				zone->free_area_new[order].nr_free--;
+			}
+			else{            //DRAM页面
+				zone->free_area[order].nr_free--;
+			}
+			/*end ADD*/
+			//zone->free_area[order].nr_free--;
+			//清除PG_buddy标志和private中的分配阶
 			rmv_page_order(buddy);
 		}
+		/*计算出合并块的第一个页的索引号*/
 		combined_idx = buddy_idx & page_idx;
+		/*得到合并块的第一个page描述符*/
 		page = page + (combined_idx - page_idx);
-		page_idx = combined_idx;
-		order++;
+		page_idx = combined_idx;  /*修改块的起始页偏移*/
+		order++;    /*阶数加1表明合并完成*/
 	}
 	if (max_order < MAX_ORDER) {
 		/* If we are here, it means order is >= pageblock_order.
@@ -756,6 +804,7 @@ continue_merging:
 	}
 
 done_merging:
+	/*重新设置块的阶数，并设置PG_buddy标志*/ 
 	set_page_order(page, order);
 
 	/*
@@ -768,20 +817,59 @@ done_merging:
 	 */
 	if ((order < MAX_ORDER-2) && pfn_valid_within(page_to_pfn(buddy))) {
 		struct page *higher_page, *higher_buddy;
+		
+		/*ADD*/
+		unsigned int res;//伙伴块和原始块是否是同一个类型的页面
+		/*end ADD*/
+		
 		combined_idx = buddy_idx & page_idx;
 		higher_page = page + (combined_idx - page_idx);
 		buddy_idx = __find_buddy_index(combined_idx, order + 1);
 		higher_buddy = higher_page + (buddy_idx - combined_idx);
-		if (page_is_buddy(higher_page, higher_buddy, order + 1)) {
+		
+		/*ADD*/
+		res = (page_is_NVM(higher_page) == page_is_NVM(higher_buddy))? 1 : 0;
+		if (page_is_buddy(higher_page, higher_buddy, order + 1) && res == 1) {
+			if(page_is_NVM(higher_page)){  //NVM页面
+				list_add_tail(&page->lru,
+				&zone->free_area_new[order].free_list[migratetype]);
+			}
+			else{						//DRAM页面
+				list_add_tail(&page->lru,
+				&zone->free_area[order].free_list[migratetype]);
+			}
+			
+			goto out;
+		}
+		/*end ADD*/
+		/*if (page_is_buddy(higher_page, higher_buddy, order + 1)) {
 			list_add_tail(&page->lru,
 				&zone->free_area[order].free_list[migratetype]);
 			goto out;
-		}
+		}*/
 	}
 
-	list_add(&page->lru, &zone->free_area[order].free_list[migratetype]);
+	/*将新块添加到对应的链表中*/
+	//list_add(&page->lru, &zone->free_area[order].free_list[migratetype]);
+	/*ADD*/
+	if(page_is_NVM(page)){
+		list_add(&page->lru, &zone->free_area_new[order].free_list[migratetype]);
+	}
+	else{
+		list_add(&page->lru, &zone->free_area[order].free_list[migratetype]);
+	}
+	/*end ADD*/
 out:
-	zone->free_area[order].nr_free++;
+	
+	/*ADD*/
+	if(page_is_NVM(page)){
+		zone->free_area_new[order].nr_free++;
+	}
+	else{
+		zone->free_area[order].nr_free++;
+	}
+	/*end ADD*/
+	//zone->free_area[order].nr_free++;
 }
 
 static inline int free_pages_check(struct page *page)
@@ -895,6 +983,7 @@ static void free_one_page(struct zone *zone,
 		is_migrate_isolate(migratetype))) {
 		migratetype = get_pfnblock_migratetype(page, pfn);
 	}
+	/* 关键函数 */
 	__free_one_page(page, pfn, zone, order, migratetype);
 	spin_unlock(&zone->lock);
 }
@@ -997,11 +1086,14 @@ static inline void init_reserved_page(unsigned long pfn)
 }
 #endif /* CONFIG_DEFERRED_STRUCT_PAGE_INIT */
 
-/*
+/* 初始化每一个page，并标记page为PageReserved
  * Initialised pages do not have PageReserved set. This function is
  * called for each range allocated by the bootmem allocator and
  * marks the pages PageReserved. The remaining valid pages are later
  * sent to the buddy page allocator.
+
+ 初始化的页面没有设置为PageReserved。 因此，为bootmem分配器分配的每个区域调用此函数，
+ 并标记页面为PageReserved。 剩余的有效页面稍后被分配给伙伴系统。
  */
 void __meminit reserve_bootmem_region(phys_addr_t start, phys_addr_t end)
 {
@@ -1012,11 +1104,13 @@ void __meminit reserve_bootmem_region(phys_addr_t start, phys_addr_t end)
 		if (pfn_valid(start_pfn)) {
 			struct page *page = pfn_to_page(start_pfn);
 
+			//初始化page
 			init_reserved_page(start_pfn);
 
 			/* Avoid false-positive PageTail() */
 			INIT_LIST_HEAD(&page->lru);
 
+			//设置page为PageReserved
 			SetPageReserved(page);
 		}
 	}
@@ -1069,17 +1163,20 @@ static void __free_pages_ok(struct page *page, unsigned int order)
 	if (!free_pages_prepare(page, order))
 		return;
 
+	/* 得到page对应的migratetype */
 	migratetype = get_pfnblock_migratetype(page, pfn);
 	local_irq_save(flags);
 	__count_vm_events(PGFREE, 1 << order);
+	/* 关键函数 */
 	free_one_page(page_zone(page), page, pfn, order, migratetype);
 	local_irq_restore(flags);
 }
 
+/* 销毁bootmem分配器，并释放空闲页框到伙伴系统（核心函数） */
 static void __init __free_pages_boot_core(struct page *page,
 					unsigned long pfn, unsigned int order)
 {
-	unsigned int nr_pages = 1 << order;
+	unsigned int nr_pages = 1 << order;  //释放的总页数
 	struct page *p = page;
 	unsigned int loop;
 
@@ -1092,8 +1189,10 @@ static void __init __free_pages_boot_core(struct page *page,
 	__ClearPageReserved(p);
 	set_page_count(p, 0);
 
-	page_zone(page)->managed_pages += nr_pages;
+	page_zone(page)->managed_pages += nr_pages;  //zone管理的总页数增加
 	set_page_refcounted(page);
+
+	//释放页面（伙伴系统）
 	__free_pages(page, order);
 }
 
@@ -1152,6 +1251,7 @@ static inline bool __meminit meminit_pfn_in_nid(unsigned long pfn, int node,
 void __init __free_pages_bootmem(struct page *page, unsigned long pfn,
 							unsigned int order)
 {
+	//pfn对应的page是否初始化了，如果未初始化就不必执行下面的释放函数。
 	if (early_page_uninitialised(pfn))
 		return;
 	return __free_pages_boot_core(page, pfn, order);
@@ -1567,14 +1667,20 @@ static int prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags,
  */
 static inline
 struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
-						int migratetype)
+						int migratetype, gfp_t gfp_flags)
 {
 	unsigned int current_order;
-	struct free_area *area;
+	//struct free_area *area;
+	/*ADD*/
+	struct free_area *free_area;
+	struct free_area *free_area_new;
+	/*end ADD*/
 	struct page *page;
 
 	/* Find a page of the appropriate size in the preferred list */
+	/*
 	for (current_order = order; current_order < MAX_ORDER; ++current_order) {
+		//TODO:增加zone->free_area_new
 		area = &(zone->free_area[current_order]);
 		page = list_first_entry_or_null(&area->free_list[migratetype],
 							struct page, lru);
@@ -1586,6 +1692,37 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 		expand(zone, page, order, current_order, area, migratetype);
 		set_pcppage_migratetype(page, migratetype);
 		return page;
+	}
+	*/
+	if(gfp_to_DRAM_or_NVM(gfp_flags)) {  //从DRAM申请页面
+		for (current_order = order; current_order < MAX_ORDER; ++current_order) {
+			free_area = &(zone->free_area[current_order]);
+			page = list_first_entry_or_null(&free_area->free_list[migratetype],
+								struct page, lru);
+			if (!page)
+				continue;
+			list_del(&page->lru);
+			rmv_page_order(page);
+			free_area->nr_free--;
+			expand(zone, page, order, current_order, free_area, migratetype);
+			set_pcppage_migratetype(page, migratetype);
+			return page;
+		}
+	}
+	else {                       //从NVM申请页面
+		for (current_order = order; current_order < MAX_ORDER; ++current_order) {
+			free_area_new = &(zone->free_area_new[current_order]);
+			page = list_first_entry_or_null(&free_area_new->free_list[migratetype],
+								struct page, lru);
+			if (!page)
+				continue;
+			list_del(&page->lru);
+			rmv_page_order(page);
+			free_area_new->nr_free--;
+			expand(zone, page, order, current_order, free_area_new, migratetype);
+			set_pcppage_migratetype(page, migratetype);
+			return page;
+		}
 	}
 
 	return NULL;
@@ -1610,13 +1747,13 @@ static int fallbacks[MIGRATE_TYPES][4] = {
 
 #ifdef CONFIG_CMA
 static struct page *__rmqueue_cma_fallback(struct zone *zone,
-					unsigned int order)
+					unsigned int order, gfp_t gfp_flags)
 {
-	return __rmqueue_smallest(zone, order, MIGRATE_CMA);
+	return __rmqueue_smallest(zone, order, MIGRATE_CMA, gfp_flags);
 }
 #else
 static inline struct page *__rmqueue_cma_fallback(struct zone *zone,
-					unsigned int order) { return NULL; }
+					unsigned int order, gfp_t gfp_flags) { return NULL; }
 #endif
 
 /*
@@ -1626,7 +1763,7 @@ static inline struct page *__rmqueue_cma_fallback(struct zone *zone,
  */
 int move_freepages(struct zone *zone,
 			  struct page *start_page, struct page *end_page,
-			  int migratetype)
+			  int migratetype, gfp_t gfp_flags)
 {
 	struct page *page;
 	unsigned int order;
@@ -1658,8 +1795,20 @@ int move_freepages(struct zone *zone,
 		}
 
 		order = page_order(page);
+		/*
 		list_move(&page->lru,
 			  &zone->free_area[order].free_list[migratetype]);
+		*/
+		/*ADD*/
+		if(gfp_to_DRAM_or_NVM(gfp_flags)) {  //从DRAM中移除该伙伴块
+			list_move(&page->lru,
+			  &zone->free_area[order].free_list[migratetype]);
+		}
+		else {   //从NVM中移除该伙伴块
+			list_move(&page->lru,
+			  &zone->free_area_new[order].free_list[migratetype]);
+		}
+		/*end ADD*/
 		page += 1 << order;
 		pages_moved += 1 << order;
 	}
@@ -1668,7 +1817,7 @@ int move_freepages(struct zone *zone,
 }
 
 int move_freepages_block(struct zone *zone, struct page *page,
-				int migratetype)
+				int migratetype, gfp_t gfp_flags)
 {
 	unsigned long start_pfn, end_pfn;
 	struct page *start_page, *end_page;
@@ -1685,7 +1834,7 @@ int move_freepages_block(struct zone *zone, struct page *page,
 	if (!zone_spans_pfn(zone, end_pfn))
 		return 0;
 
-	return move_freepages(zone, start_page, end_page, migratetype);
+	return move_freepages(zone, start_page, end_page, migratetype, gfp_flags);
 }
 
 static void change_pageblock_range(struct page *pageblock_page,
@@ -1740,7 +1889,7 @@ static bool can_steal_fallback(unsigned int order, int start_mt)
  * use it's pages as requested migratetype in the future.
  */
 static void steal_suitable_fallback(struct zone *zone, struct page *page,
-							  int start_type)
+							  int start_type, gfp_t gfp_flags)
 {
 	unsigned int current_order = page_order(page);
 	int pages;
@@ -1751,7 +1900,7 @@ static void steal_suitable_fallback(struct zone *zone, struct page *page,
 		return;
 	}
 
-	pages = move_freepages_block(zone, page, start_type);
+	pages = move_freepages_block(zone, page, start_type, gfp_flags);
 
 	/* Claim the whole block if over half of it is free */
 	if (pages >= (1 << (pageblock_order-1)) ||
@@ -1826,7 +1975,7 @@ static void reserve_highatomic_pageblock(struct page *page, struct zone *zone,
 			!is_migrate_isolate(mt) && !is_migrate_cma(mt)) {
 		zone->nr_reserved_highatomic += pageblock_nr_pages;
 		set_pageblock_migratetype(page, MIGRATE_HIGHATOMIC);
-		move_freepages_block(zone, page, MIGRATE_HIGHATOMIC);
+		move_freepages_block(zone, page, MIGRATE_HIGHATOMIC, __GFP_DRAM);
 	}
 
 out_unlock:
@@ -1883,7 +2032,7 @@ static void unreserve_highatomic_pageblock(const struct alloc_context *ac)
 			 * may increase.
 			 */
 			set_pageblock_migratetype(page, ac->migratetype);
-			move_freepages_block(zone, page, ac->migratetype);
+			move_freepages_block(zone, page, ac->migratetype, __GFP_DRAM);
 			spin_unlock_irqrestore(&zone->lock, flags);
 			return;
 		}
@@ -1893,7 +2042,7 @@ static void unreserve_highatomic_pageblock(const struct alloc_context *ac)
 
 /* Remove an element from the buddy allocator from the fallback list */
 static inline struct page *
-__rmqueue_fallback(struct zone *zone, unsigned int order, int start_migratetype)
+__rmqueue_fallback(struct zone *zone, unsigned int order, int start_migratetype, gfp_t gfp_flags)
 {
 	struct free_area *area;
 	unsigned int current_order;
@@ -1905,7 +2054,15 @@ __rmqueue_fallback(struct zone *zone, unsigned int order, int start_migratetype)
 	for (current_order = MAX_ORDER-1;
 				current_order >= order && current_order <= MAX_ORDER-1;
 				--current_order) {
-		area = &(zone->free_area[current_order]);
+		/*ADD*/
+		if(gfp_to_DRAM_or_NVM(gfp_flags)) {
+			area = &(zone->free_area[current_order]);
+		}
+		else {
+			area = &(zone->free_area_new[current_order]);
+		}
+		/*end ADD*/
+		//area = &(zone->free_area[current_order]);
 		fallback_mt = find_suitable_fallback(area, current_order,
 				start_migratetype, false, &can_steal);
 		if (fallback_mt == -1)
@@ -1914,7 +2071,7 @@ __rmqueue_fallback(struct zone *zone, unsigned int order, int start_migratetype)
 		page = list_first_entry(&area->free_list[fallback_mt],
 						struct page, lru);
 		if (can_steal)
-			steal_suitable_fallback(zone, page, start_migratetype);
+			steal_suitable_fallback(zone, page, start_migratetype, gfp_flags);
 
 		/* Remove the page from the freelists */
 		area->nr_free--;
@@ -1946,17 +2103,17 @@ __rmqueue_fallback(struct zone *zone, unsigned int order, int start_migratetype)
  * Call me with the zone->lock already held.
  */
 static struct page *__rmqueue(struct zone *zone, unsigned int order,
-				int migratetype)
+				int migratetype, gfp_t gfp_flags)
 {
 	struct page *page;
 
-	page = __rmqueue_smallest(zone, order, migratetype);
+	page = __rmqueue_smallest(zone, order, migratetype, gfp_flags);
 	if (unlikely(!page)) {
 		if (migratetype == MIGRATE_MOVABLE)
-			page = __rmqueue_cma_fallback(zone, order);
+			page = __rmqueue_cma_fallback(zone, order, gfp_flags);
 
 		if (!page)
-			page = __rmqueue_fallback(zone, order, migratetype);
+			page = __rmqueue_fallback(zone, order, migratetype, gfp_flags);
 	}
 
 	trace_mm_page_alloc_zone_locked(page, order, migratetype);
@@ -1970,13 +2127,13 @@ static struct page *__rmqueue(struct zone *zone, unsigned int order,
  */
 static int rmqueue_bulk(struct zone *zone, unsigned int order,
 			unsigned long count, struct list_head *list,
-			int migratetype, bool cold)
+			int migratetype, bool cold, gfp_t gfp_flags)
 {
 	int i;
 
 	spin_lock(&zone->lock);
 	for (i = 0; i < count; ++i) {
-		struct page *page = __rmqueue(zone, order, migratetype);
+		struct page *page = __rmqueue(zone, order, migratetype, gfp_flags);
 		if (unlikely(page == NULL))
 			break;
 
@@ -2178,10 +2335,17 @@ void mark_free_pages(struct zone *zone)
 /*
  * Free a 0-order page
  * cold == true ? free a cold page : free a hot page
+
+ * 判断page属于哪一种类型的页面（DRAM or NVM）
+ * 然后插入到对应的每CPU页框高速缓存链表。
  */
 void free_hot_cold_page(struct page *page, bool cold)
 {
 	struct zone *zone = page_zone(page);
+	
+	/*ADD*/
+	struct per_cpu_pages *pcp_new;
+	/*end ADD*/
 	struct per_cpu_pages *pcp;
 	unsigned long flags;
 	unsigned long pfn = page_to_pfn(page);
@@ -2209,17 +2373,36 @@ void free_hot_cold_page(struct page *page, bool cold)
 		}
 		migratetype = MIGRATE_MOVABLE;
 	}
-
-	pcp = &this_cpu_ptr(zone->pageset)->pcp;
-	if (!cold)
-		list_add(&page->lru, &pcp->lists[migratetype]);
-	else
-		list_add_tail(&page->lru, &pcp->lists[migratetype]);
-	pcp->count++;
-	if (pcp->count >= pcp->high) {
-		unsigned long batch = READ_ONCE(pcp->batch);
-		free_pcppages_bulk(zone, batch, pcp);
-		pcp->count -= batch;
+	/* NVM页面，插入到NVM专属的每CPU页框高速缓存 */
+	if(page_is_NVM(page)){
+		pcp_new = &this_cpu_ptr(zone->pageset)->pcp_new;
+		if (!cold)
+			list_add(&page->lru, &pcp_new->lists[migratetype]);
+		else
+			list_add_tail(&page->lru, &pcp_new->lists[migratetype]);
+		pcp_new->count++;
+		if (pcp_new->count >= pcp_new->high) {
+			unsigned long batch = READ_ONCE(pcp_new->batch);
+			/*高速缓存中page总数超出阈值，则释放部分page到伙伴系统*/
+			free_pcppages_bulk(zone, batch, pcp_new);
+			pcp_new->count -= batch;
+		}
+		printk(KERN_EMERG "NVM: count = %d, high = %d, batch = %d",pcp_new->count,pcp_new->high,pcp_new->batch);
+	}
+	else{  /* DRAM页面，插入到DRAM专属的每CPU页框高速缓存 */
+		pcp = &this_cpu_ptr(zone->pageset)->pcp;
+		if (!cold)
+			list_add(&page->lru, &pcp->lists[migratetype]);
+		else
+			list_add_tail(&page->lru, &pcp->lists[migratetype]);
+		pcp->count++;
+		if (pcp->count >= pcp->high) {
+			unsigned long batch = READ_ONCE(pcp->batch);
+			/* 释放部分page到伙伴系统 */
+			free_pcppages_bulk(zone, batch, pcp);
+			pcp->count -= batch;
+		}
+		printk(KERN_EMERG "NVM: count = %d, high = %d, batch = %d",pcp->count,pcp->high,pcp->batch);
 	}
 
 out:
@@ -2357,14 +2540,22 @@ struct page *buffered_rmqueue(struct zone *preferred_zone,
 	if (likely(order == 0)) {
 		struct per_cpu_pages *pcp;
 		struct list_head *list;
-
-		local_irq_save(flags);
-		pcp = &this_cpu_ptr(zone->pageset)->pcp;
+	
+		local_irq_save(flags);  //禁止本地中断
+		
+		/*ADD*/
+		if(gfp_to_DRAM_or_NVM(gfp_flags)) {  //DRAM申请
+			pcp = &this_cpu_ptr(zone->pageset)->pcp;
+		}
+		else {   //NVM申请
+			pcp = &this_cpu_ptr(zone->pageset)->pcp_new;
+		}
+		/*end ADD*/
 		list = &pcp->lists[migratetype];
 		if (list_empty(list)) {
 			pcp->count += rmqueue_bulk(zone, 0,
 					pcp->batch, list,
-					migratetype, cold);
+					migratetype, cold, gfp_flags);
 			if (unlikely(list_empty(list)))
 				goto failed;
 		}
@@ -2382,16 +2573,16 @@ struct page *buffered_rmqueue(struct zone *preferred_zone,
 		 * allocate greater than order-1 page units with __GFP_NOFAIL.
 		 */
 		WARN_ON_ONCE((gfp_flags & __GFP_NOFAIL) && (order > 1));
-		spin_lock_irqsave(&zone->lock, flags);
+		spin_lock_irqsave(&zone->lock, flags);  //获取zone的自旋锁，禁止本地中断，并禁止内核抢占
 
 		page = NULL;
 		if (alloc_flags & ALLOC_HARDER) {
-			page = __rmqueue_smallest(zone, order, MIGRATE_HIGHATOMIC);
+			page = __rmqueue_smallest(zone, order, MIGRATE_HIGHATOMIC, gfp_flags);
 			if (page)
 				trace_mm_page_alloc_zone_locked(page, order, migratetype);
 		}
 		if (!page)
-			page = __rmqueue(zone, order, migratetype);
+			page = __rmqueue(zone, order, migratetype, gfp_flags);
 		spin_unlock(&zone->lock);
 		if (!page)
 			goto failed;
@@ -2406,7 +2597,7 @@ struct page *buffered_rmqueue(struct zone *preferred_zone,
 
 	__count_zone_vm_events(PGALLOC, zone, 1 << order);
 	zone_statistics(preferred_zone, zone, gfp_flags);
-	local_irq_restore(flags);
+	local_irq_restore(flags);  //打开本地中断
 
 	VM_BUG_ON_PAGE(bad_range(zone, page), page);
 	return page;
@@ -3052,6 +3243,7 @@ static void wake_all_kswapds(unsigned int order, const struct alloc_context *ac)
 		wakeup_kswapd(zone, order, zone_idx(ac->preferred_zone));
 }
 
+/* 对分配标志进行调整，稍微降低分配标准以便这次调用get_page_from_freelist()有可能分配到内存 */
 static inline int
 gfp_to_alloc_flags(gfp_t gfp_mask)
 {
@@ -3143,6 +3335,8 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 		gfp_mask &= ~__GFP_ATOMIC;
 
 retry:
+	/* 调用wake_all_kswapd()唤醒每个zone所属node中的kswapd守护进程。
+	这个守护进程负责换出很少使用的页，以提高目前系统可以用的空闲页框 */
 	if (gfp_mask & __GFP_KSWAPD_RECLAIM)
 		wake_all_kswapds(order, ac);
 
@@ -3151,6 +3345,8 @@ retry:
 	 * reclaim. Now things get more complex, so set up alloc_flags according
 	 * to how we want to proceed.
 	 */
+	 /* 在kswapd交换进程被唤醒之后，该函数开始尝试新一轮的分配。
+	 它首先通过gfp_to_alloc_flags()对分配标志进行调整，稍微降低分配标准以便这次调用get_page_from_freelist()有可能分配到内存 */
 	alloc_flags = gfp_to_alloc_flags(gfp_mask);
 
 	/*
@@ -3164,13 +3360,17 @@ retry:
 		ac->classzone_idx = zonelist_zone_idx(preferred_zoneref);
 	}
 
-	/* This is the last chance, in general, before the goto nopage. */
+	/*
+		重新尝试页面分配
+	This is the last chance, in general, before the goto nopage. */
 	page = get_page_from_freelist(gfp_mask, order,
 				alloc_flags & ~ALLOC_NO_WATERMARKS, ac);
 	if (page)
 		goto got_pg;
 
-	/* Allocate without watermarks if the context allows */
+	/*  
+		如果允许忽略水印值，则再尝试一次分配
+	Allocate without watermarks if the context allows */
 	if (alloc_flags & ALLOC_NO_WATERMARKS) {
 		/*
 		 * Ignore mempolicies if ALLOC_NO_WATERMARKS on the grounds
@@ -3376,6 +3576,7 @@ retry_cpuset:
 		alloc_mask = memalloc_noio_flags(gfp_mask);
 		ac.spread_dirty_pages = false;
 
+		//慢速分配
 		page = __alloc_pages_slowpath(alloc_mask, order, &ac);
 	}
 
@@ -3424,13 +3625,54 @@ unsigned long get_zeroed_page(gfp_t gfp_mask)
 }
 EXPORT_SYMBOL(get_zeroed_page);
 
+/*ADD*/
+unsigned int page_is_NVM(struct page* page)
+{
+	unsigned long pfn = page_to_pfn(page);           //page对应的页框号
+	phys_addr_t page_address = pfn << PAGE_SHIFT;  //page对应的物理地址
+
+	if(page_address >= MEM_BORDER){   //NVM页面
+		printk(KERN_EMERG "该页面是NVM页面，地址是:%08lx\n", page_address);
+		return 1;
+	}
+	else{								//DRAM页面
+		printk(KERN_EMERG "该页面是DRAM页面，地址是:%08lx\n", page_address);
+		return 0;
+	}
+}
+EXPORT_SYMBOL(page_is_NVM);
+
+struct page_short* page_to_page_short(struct page *page,bool operat)
+{
+	/* slub分配一个page_short结构 */
+	struct page_short *page_short = kmem_cache_alloc(page_short_cachep, GFP_KERNEL);
+	page_short->page = page;
+
+	/* 初始化标志位 */
+	page_short->refer_bit = false;
+	page_short->dirty_bit = false;
+	page_short->sugg_bit = false;
+	page_short->source_bit = false;
+
+	/* 插入哪一个链表需要判断，重新设计一个函数 */
+
+	return page_short;
+}
+
+/*end ADD*/
+
 void __free_pages(struct page *page, unsigned int order)
 {
 	if (put_page_testzero(page)) {
-		if (order == 0)
+		if (order == 0){
+			/* 测试环境内存有限，地址长度（16进制地址）是8个，可以根据具体环境修改 */
+			printk(KERN_EMERG "删除单个page,地址是：%08lx\n", page_to_pfn(page)<<PAGE_SHIFT);
 			free_hot_cold_page(page, false);
-		else
+		}
+		else{
+			printk(KERN_EMERG "删除2的%d个page,地址是：%08lx\n", order,page_to_pfn(page)<<PAGE_SHIFT);
 			__free_pages_ok(page, order);
+		}
 	}
 }
 
@@ -4741,13 +4983,28 @@ not_early:
 	}
 }
 
+/* 初始化伙伴系统 */
 static void __meminit zone_init_free_lists(struct zone *zone)
 {
 	unsigned int order, t;
+
+	/* order:分配阶； t：migratetype页面类型 */
 	for_each_migratetype_order(order, t) {
+		/* 每一个freelist设为双向循环链表 */
 		INIT_LIST_HEAD(&zone->free_area[order].free_list[t]);
+		/* 总页面 =0 */
 		zone->free_area[order].nr_free = 0;
 	}
+
+	/*ADD*/
+	/* 初始化free_area_new，NVM页面专用 */
+	for_each_migratetype_order(order, t) {
+		/* 每一个freelist设为双向循环链表 */
+		INIT_LIST_HEAD(&zone->free_area_new[order].free_list[t]);
+		/* 总页面 =0 */
+		zone->free_area[order].nr_free = 0;
+	}
+	/*end ADD*/
 }
 
 #ifndef __HAVE_ARCH_MEMMAP_INIT
@@ -4836,19 +5093,42 @@ static void pageset_update(struct per_cpu_pages *pcp, unsigned long high,
 static void pageset_set_batch(struct per_cpu_pageset *p, unsigned long batch)
 {
 	pageset_update(&p->pcp, 6 * batch, max(1UL, 1 * batch));
+	
+	/*ADD*/
+	pageset_update(&p->pcp_new, 6 * batch, max(1UL, 1 * batch));
+	/*end ADD*/
 }
 
 static void pageset_init(struct per_cpu_pageset *p)
 {
-	struct per_cpu_pages *pcp;
+	struct per_cpu_pages *pcp;	
+	/*ADD*/
+	struct per_cpu_pages *pcp_new;  //NVM页的每CPU页框高速缓存
+	/*end ADD*/
 	int migratetype;
 
 	memset(p, 0, sizeof(*p));
 
-	pcp = &p->pcp;
-	pcp->count = 0;
+	pcp = &p->pcp;	
+	
+	/*ADD*/
+	pcp_new = &p->pcp_new;
+	/*end ADD*/
+	
+	pcp->count = 0;	
+	
+	/*ADD*/
+	pcp_new->count = 0;
+	/*end ADD*/
+
+	//初始化每CPU页框高速缓存的所有链表
 	for (migratetype = 0; migratetype < MIGRATE_PCPTYPES; migratetype++)
 		INIT_LIST_HEAD(&pcp->lists[migratetype]);
+	
+	/*ADD*/
+	for (migratetype = 0; migratetype < MIGRATE_PCPTYPES; migratetype++)
+		INIT_LIST_HEAD(&pcp_new->lists[migratetype]);
+	/*end ADD*/
 }
 
 static void setup_pageset(struct per_cpu_pageset *p, unsigned long batch)
@@ -4869,6 +5149,10 @@ static void pageset_set_high(struct per_cpu_pageset *p,
 		batch = PAGE_SHIFT * 8;
 
 	pageset_update(&p->pcp, high, batch);
+	
+	/*ADD*/
+	pageset_update(&p->pcp_new, high, batch);
+	/*end ADD*/
 }
 
 static void pageset_set_high_and_batch(struct zone *zone,
@@ -4888,11 +5172,19 @@ static void __meminit zone_pageset_init(struct zone *zone, int cpu)
 
 	pageset_init(pcp);
 	pageset_set_high_and_batch(zone, pcp);
+
+	/*ADD*/
+	printk(KERN_EMERG "zone：%s\n",zone->name);
+	printk(KERN_EMERG "DRAM：count = %d, high = %d, batch = %d\n",pcp->pcp.count,pcp->pcp.high,pcp->pcp.batch);
+	printk(KERN_EMERG "NVM：count = %d, high = %d, batch = %d\n",pcp->pcp_new.count,pcp->pcp_new.high,pcp->pcp_new.batch);
+	/*end ADD*/
 }
 
 static void __meminit setup_zone_pageset(struct zone *zone)
 {
 	int cpu;
+
+	//为struct per_cpu_pageset申请空间
 	zone->pageset = alloc_percpu(struct per_cpu_pageset);
 	for_each_possible_cpu(cpu)
 		zone_pageset_init(zone, cpu);
@@ -4907,7 +5199,7 @@ void __init setup_per_cpu_pageset(void)
 	struct zone *zone;
 
 	for_each_populated_zone(zone)
-		setup_zone_pageset(zone);
+		setup_zone_pageset(zone);  //次函数实现就在上面
 }
 
 static noinline __init_refok
@@ -4986,7 +5278,7 @@ int __meminit init_currently_empty_zone(struct zone *zone,
 			pgdat->node_id,
 			(unsigned long)zone_idx(zone),
 			zone_start_pfn, (zone_start_pfn + size));
-
+	/* 初始化伙伴系统的free_list */
 	zone_init_free_lists(zone);
 
 	return 0;
@@ -5299,6 +5591,7 @@ static inline unsigned long __meminit zone_absent_pages_in_node(int nid,
 
 #endif /* CONFIG_HAVE_MEMBLOCK_NODE_MAP */
 
+/*计算节点占用的总页面数和除去洞的实际总页面数*/
 static void __meminit calculate_node_totalpages(struct pglist_data *pgdat,
 						unsigned long node_start_pfn,
 						unsigned long node_end_pfn,
@@ -5435,7 +5728,7 @@ static unsigned long __paginginit calc_memmap_size(unsigned long spanned_pages,
 }
 
 /*
- * Set up the zone data structures:
+ * Set up the zone data structures:  初始化zone结构
  *   - mark all pages reserved
  *   - mark all memory queues empty
  *   - clear the memory bitmaps
@@ -5466,6 +5759,7 @@ static void __paginginit free_area_init_core(struct pglist_data *pgdat)
 #endif
 	pgdat_page_ext_init(pgdat);
 
+	/* 遍历node下的每一个zone，对zone初始化 */
 	for (j = 0; j < MAX_NR_ZONES; j++) {
 		struct zone *zone = pgdat->node_zones + j;
 		unsigned long size, realsize, freesize, memmap_pages;
@@ -5523,6 +5817,8 @@ static void __paginginit free_area_init_core(struct pglist_data *pgdat)
 		spin_lock_init(&zone->lru_lock);
 		zone_seqlock_init(zone);
 		zone->zone_pgdat = pgdat;
+
+		//对zone中的每CPU页框高速缓存做初步初始化，但具体初始化过程并不在此处。
 		zone_pcp_init(zone);
 
 		/* For bootup, initialized properly in watermark setup */
@@ -5534,8 +5830,24 @@ static void __paginginit free_area_init_core(struct pglist_data *pgdat)
 
 		set_pageblock_order();
 		setup_usemap(pgdat, zone, zone_start_pfn, size);
+
+		/*ADD*/
+		/*初始化zone中4个CLOCK链表和两个历史队列*/
+		/*初始化四个CLOCK链表，INIT_LIST_HEAD()可以直接初始化*/
+		INIT_LIST_HEAD(&zone->DF_head);
+		INIT_LIST_HEAD(&zone->DS_head);
+		INIT_LIST_HEAD(&zone->NF_head);
+		INIT_LIST_HEAD(&zone->NS_head);
+
+		/* 初始化历史队列 */
+		INIT_LIST_HEAD(&zone->DH_head);
+		INIT_LIST_HEAD(&zone->NH_head);
+		/*end ADD*/
+		
+		/* 初始化zone中的伙伴系统 */
 		ret = init_currently_empty_zone(zone, zone_start_pfn, size);
 		BUG_ON(ret);
+		/* 初始化page结构 */
 		memmap_init(size, nid, j, zone_start_pfn);
 	}
 }
@@ -5586,6 +5898,7 @@ static void __init_refok alloc_node_mem_map(struct pglist_data *pgdat)
 #endif /* CONFIG_FLAT_NODE_MEM_MAP */
 }
 
+/* 初始化pglist_data、zone结构 */
 void __paginginit free_area_init_node(int nid, unsigned long *zones_size,
 		unsigned long node_start_pfn, unsigned long *zholes_size)
 {
@@ -5607,9 +5920,11 @@ void __paginginit free_area_init_node(int nid, unsigned long *zones_size,
 #else
 	start_pfn = node_start_pfn;
 #endif
+	/*计算节点占用的总页面数和除去洞的实际总页面数*/
 	calculate_node_totalpages(pgdat, start_pfn, end_pfn,
 				  zones_size, zholes_size);
 
+	/*分配节点的mem_map*/
 	alloc_node_mem_map(pgdat);
 #ifdef CONFIG_FLAT_NODE_MEM_MAP
 	printk(KERN_DEBUG "free_area_init_node: node %d, pgdat %08lx, node_mem_map %08lx\n",
@@ -5617,6 +5932,7 @@ void __paginginit free_area_init_node(int nid, unsigned long *zones_size,
 		(unsigned long)pgdat->node_mem_map);
 #endif
 
+	/*上面初始化pglist_data结构的成员，下面这个函数初始化node下每一个zone结构*/
 	free_area_init_core(pgdat);
 }
 
@@ -6029,11 +6345,14 @@ void __init free_area_init_nodes(unsigned long *max_zone_pfn)
 			(u64)start_pfn << PAGE_SHIFT,
 			((u64)end_pfn << PAGE_SHIFT) - 1);
 
-	/* Initialise every node */
+	/* Initialise every node 
+		初始化每一个node
+	*/
 	mminit_verify_pageflags_layout();
 	setup_nr_node_ids();
-	for_each_online_node(nid) {
+	for_each_online_node(nid) {  /* 遍历每个node */
 		pg_data_t *pgdat = NODE_DATA(nid);
+		/* 初始化pglist_data、zone结构 */
 		free_area_init_node(nid, NULL,
 				find_min_pfn_for_node(nid), NULL);
 
@@ -6043,6 +6362,77 @@ void __init free_area_init_nodes(unsigned long *max_zone_pfn)
 		check_for_memory(pgdat, nid);
 	}
 }
+
+/*ADD*/
+//测试伙伴系统中的数据
+void show_buddy_info_test(void)
+{
+	int i,nid;
+	int j;
+	struct zone each_zone;
+	struct free_area free_area;   //DRAM伙伴系统
+	struct free_area free_area_new;  //NVM伙伴系统
+	for_each_online_node(nid) {
+		pg_data_t *pgdat = NODE_DATA(nid);
+		/* 遍历每个zone，打印伙伴系统的信息 */
+		for(i = 0; i < __MAX_NR_ZONES; ++i){
+			if(i == ZONE_MOVABLE){
+				continue;
+			}
+			each_zone = pgdat->node_zones[i]; //获得对应的zone
+
+			printk(KERN_EMERG "zone：%s\n",each_zone.name);
+			/* 进入伙伴系统，获取具体的信息 */
+			//遍历不同阶的链表（DRAM）
+			for(j = 0; j<MAX_ORDER; ++j){
+				free_area = each_zone.free_area[j];
+				printk(KERN_EMERG "DRAM: order = %d ：空闲块数量=%ld\n",j,free_area.nr_free);
+				/* TODO:遍历链表中所有块，并将每个块的首地址打印出来 */
+				/*for(k = 0; k < MIGRATE_TYPES; ++k){
+					
+				}
+				*/
+			}
+			//遍历不同阶的链表（NVM）
+			for(j = 0; j<MAX_ORDER; ++j){
+				free_area_new = each_zone.free_area_new[j];
+				printk(KERN_EMERG "NVM: order = %d ：空闲块数量=%ld\n",j,free_area_new.nr_free);
+				/* TODO:遍历链表中所有块，并将每个块的首地址打印出来 */
+				/*for(k = 0; k < MIGRATE_TYPES; ++k){
+					
+				}
+				*/
+			}
+		}
+	}
+}
+EXPORT_SYMBOL(show_buddy_info_test);
+
+/*end ADD*/
+
+/*ADD*/
+//测试每CPU页框高速缓存中的数据
+void show_per_cpu_pageset_info_test(void)
+{
+	struct zone *zone;
+	int cpu;
+	struct per_cpu_pageset *pcp;
+
+	for_each_populated_zone(zone){
+		for_each_possible_cpu(cpu){
+			pcp = per_cpu_ptr(zone->pageset,cpu);
+			printk(KERN_EMERG "zone：%s\n",zone->name);
+			printk(KERN_EMERG "DRAM：count = %d, high = %d, batch = %d\n",pcp->pcp.count,pcp->pcp.high,pcp->pcp.batch);
+			printk(KERN_EMERG "NVM：count = %d, high = %d, batch = %d\n",pcp->pcp_new.count,pcp->pcp_new.high,pcp->pcp_new.batch);
+		}
+	}
+}
+EXPORT_SYMBOL(show_per_cpu_pageset_info_test);
+
+
+/*end ADD*/
+
+
 
 static int __init cmdline_parse_core(char *p, unsigned long *core)
 {

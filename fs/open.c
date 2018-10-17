@@ -885,6 +885,14 @@ static inline int build_open_flags(int flags, umode_t mode, struct open_flags *o
 	int lookup_flags = 0;
 	int acc_mode = ACC_MODE(flags);
 
+	/*
+	注意此处:	
+	1如果open时flags没有设置O_CREATE标志，则无论open入参mode是何值，系统都认为是0，即未使用mode入参.
+	2如果open时flags设置O_CREATE标志，则需要重新生成mode，其中S_IALLUGO是所有访问权限的并集.
+	例如：以mode=0777打开文件，经此处理后变为0100777;
+	S_IFREG=0100000 表示普通文件
+	S_IFDIR=040000  表示目录文件
+	 */	
 	if (flags & (O_CREAT | __O_TMPFILE))
 		op->mode = (mode & S_IALLUGO) | S_IFREG;
 	else
@@ -998,21 +1006,30 @@ struct file *file_open_root(struct dentry *dentry, struct vfsmount *mnt,
 }
 EXPORT_SYMBOL(file_open_root);
 
+/* 
+@flags:例如：O_RDONLY 只读打开、O_WRONLY 只写打开、O_RDWR 可读可写打开
+@mode: 指定文件权限，可以用八进制数表示，比如0644表示-rw-r--r--，也可以用S_IRUSR、S_IWUSR等宏定义按位或起来表示
+*/
 long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 {
-	struct open_flags op;
+	struct open_flags op; 
+	//建立文件打开的标志位信息,文件打开的标志放在了open_flags中
 	int fd = build_open_flags(flags, mode, &op);
 	struct filename *tmp;
 
 	if (fd)
 		return fd;
-
+	
+	// 通过该函数将用户空间的文件名传递到内核  
+	// tmp是一个cache类的动态内存空间,用于保存文件路径名
 	tmp = getname(filename);
 	if (IS_ERR(tmp))
 		return PTR_ERR(tmp);
 
+	// 获取一个未使用的文件描述符, 和inode无关
 	fd = get_unused_fd_flags(flags);
 	if (fd >= 0) {
+		// 打开文件,将文件名转换为文件结构 
 		struct file *f = do_filp_open(dfd, tmp, &op);
 		if (IS_ERR(f)) {
 			put_unused_fd(fd);

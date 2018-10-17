@@ -17,20 +17,27 @@
  * needs to survive until the page is last deleted from the LRU, which
  * could be as far down as __page_cache_release.
  */
+ /* 该page是否是文件页 */
 static inline int page_is_file_cache(struct page *page)
 {
 	return !PageSwapBacked(page);
 }
 
+/* 将page插入到LRU链表，lru是LRU链表的类型 */
 static __always_inline void add_page_to_lru_list(struct page *page,
 				struct lruvec *lruvec, enum lru_list lru)
 {
+	/* 获取页的数量，因为可能是透明大页的情况，会是多个页 */
 	int nr_pages = hpage_nr_pages(page);
+	/* 更新lruvec中lru类型的链表的页数量 */
 	mem_cgroup_update_lru_size(lruvec, lru, nr_pages);
+	/* 加入到对应LRU链表头部，这里不上锁，所以在调用此函数前需要上锁 */
 	list_add(&page->lru, &lruvec->lists[lru]);
+	/* 更新统计 */
 	__mod_zone_page_state(lruvec_zone(lruvec), NR_LRU_BASE + lru, nr_pages);
 }
 
+/* 将page从LRU链表删除，lru是LRU链表的类型 */
 static __always_inline void del_page_from_lru_list(struct page *page,
 				struct lruvec *lruvec, enum lru_list lru)
 {

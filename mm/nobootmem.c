@@ -101,7 +101,7 @@ static void __init __free_pages_memory(unsigned long start, unsigned long end)
 
 		while (start + (1UL << order) > end)
 			order--;
-
+		//释放bootmem管理的页面
 		__free_pages_bootmem(pfn_to_page(start), start, order);
 
 		start += (1UL << order);
@@ -111,13 +111,14 @@ static void __init __free_pages_memory(unsigned long start, unsigned long end)
 static unsigned long __init __free_memory_core(phys_addr_t start,
 				 phys_addr_t end)
 {
-	unsigned long start_pfn = PFN_UP(start);
+	unsigned long start_pfn = PFN_UP(start);  //起始页框号
 	unsigned long end_pfn = min_t(unsigned long,
-				      PFN_DOWN(end), max_low_pfn);
+				      PFN_DOWN(end), max_low_pfn);  //结束页框号
 
 	if (start_pfn > end_pfn)
 		return 0;
 
+	//释放内存的主要函数
 	__free_pages_memory(start_pfn, end_pfn);
 
 	return end_pfn - start_pfn;
@@ -131,9 +132,11 @@ static unsigned long __init free_low_memory_core_early(void)
 
 	memblock_clear_hotplug(0, -1);
 
+	/* 初始化region内的每一个page */
 	for_each_reserved_mem_region(i, &start, &end)
 		reserve_bootmem_region(start, end);
 
+	/* 释放bootmem管理的内存 */
 	for_each_free_mem_range(i, NUMA_NO_NODE, MEMBLOCK_NONE, &start, &end,
 				NULL)
 		count += __free_memory_core(start, end);
@@ -181,6 +184,7 @@ void __init reset_all_zones_managed_pages(void)
 }
 
 /**
+	x86_64系统中使用该函数，位于nobootmem.c
  * free_all_bootmem - release free pages to the buddy allocator
  *
  * Returns the number of pages actually released.

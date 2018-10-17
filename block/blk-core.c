@@ -1825,17 +1825,21 @@ out_unlock:
 }
 
 /*
+	检查当前块设备是否是一个磁盘分区；
+	如果是，则重新映射block的位置（之前block的位置n是相对于磁盘分区起始位置的，要将block的位置n
+	改成相对于整个磁盘的扇区号 n + p->start_sect）
  * If bio->bi_dev is a partition, remap the location
  */
 static inline void blk_partition_remap(struct bio *bio)
 {
 	struct block_device *bdev = bio->bi_bdev;
 
+	/* 如果bdev != bdev->bd_contains，则该块设备是一个磁盘分区 */
 	if (bio_sectors(bio) && bdev != bdev->bd_contains) {
 		struct hd_struct *p = bdev->bd_part;
 
-		bio->bi_iter.bi_sector += p->start_sect;
-		bio->bi_bdev = bdev->bd_contains;
+		bio->bi_iter.bi_sector += p->start_sect;  //修改bi_sector位置
+		bio->bi_bdev = bdev->bd_contains;       //bi_bdev设置为整个磁盘的块设备描述符
 
 		trace_block_bio_remap(bdev_get_queue(bio->bi_bdev), bio,
 				      bdev->bd_dev,
@@ -1923,7 +1927,7 @@ static noinline_for_stack bool
 generic_make_request_checks(struct bio *bio)
 {
 	struct request_queue *q;
-	int nr_sectors = bio_sectors(bio);
+	int nr_sectors = bio_sectors(bio);  //需要传送的数据所占的扇区数
 	int err = -EIO;
 	char b[BDEVNAME_SIZE];
 	struct hd_struct *part;
@@ -1933,6 +1937,7 @@ generic_make_request_checks(struct bio *bio)
 	if (bio_check_eod(bio, nr_sectors))
 		goto end_io;
 
+	/* 获取与块设备相关的请求队列q */
 	q = bdev_get_queue(bio->bi_bdev);
 	if (unlikely(!q)) {
 		printk(KERN_ERR
@@ -1943,6 +1948,7 @@ generic_make_request_checks(struct bio *bio)
 		goto end_io;
 	}
 
+	/* 获取磁盘的分区描述符数组 */
 	part = bio->bi_bdev->bd_part;
 	if (should_fail_request(part, bio->bi_iter.bi_size) ||
 	    should_fail_request(&part_to_disk(part)->part0,
@@ -1950,6 +1956,9 @@ generic_make_request_checks(struct bio *bio)
 		goto end_io;
 
 	/*
+		检查当前块设备是否是一个磁盘分区，如果是，则重新映射block的位置
+		（之前block的位置n是相对于磁盘分区起始位置的，要将block的位置n
+		改成相对于整个磁盘的扇区号 n + p->start_sect）
 	 * If this device has partitions, remap block n
 	 * of partition p to block n+start(p) of the disk.
 	 */
@@ -2004,6 +2013,7 @@ end_io:
 }
 
 /**
+	通用块层的主要入口点，在此之前，bio描述符已经被初始化了
  * generic_make_request - hand a buffer to its device driver for I/O
  * @bio:  The bio describing the location in memory and on the device.
  *
@@ -2032,6 +2042,7 @@ blk_qc_t generic_make_request(struct bio *bio)
 	struct bio_list bio_list_on_stack;
 	blk_qc_t ret = BLK_QC_T_NONE;
 
+	/* 对bio检查是否越界，当前块设备是否是磁盘分区 */
 	if (!generic_make_request_checks(bio))
 		goto out;
 
@@ -2045,6 +2056,7 @@ blk_qc_t generic_make_request(struct bio *bio)
 	 * it is non-NULL, then a make_request is active, and new requests
 	 * should be added at the tail
 	 */
+	 /* 将bio加入到当前进程的bio_list中 */
 	if (current->bio_list) {
 		bio_list_add(current->bio_list, bio);
 		goto out;
@@ -2071,6 +2083,7 @@ blk_qc_t generic_make_request(struct bio *bio)
 		struct request_queue *q = bdev_get_queue(bio->bi_bdev);
 
 		if (likely(blk_queue_enter(q, false) == 0)) {
+			/* 调用q->make_request_fn方法将bio请求插入到请求队列q中 */
 			ret = q->make_request_fn(q, bio);
 
 			blk_queue_exit(q);
@@ -2091,6 +2104,7 @@ out:
 EXPORT_SYMBOL(generic_make_request);
 
 /**
+	向块设备层提交一个bio请求
  * submit_bio - submit a bio to the block device layer for I/O
  * @rw: whether to %READ or %WRITE, or maybe to %READA (read ahead)
  * @bio: The &struct bio which describes the I/O

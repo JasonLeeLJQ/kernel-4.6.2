@@ -18,7 +18,7 @@
 #define F2FS_MIN_LOG_SECTOR_SIZE	9	/* 9 bits for 512 bytes */
 #define F2FS_MAX_LOG_SECTOR_SIZE	12	/* 12 bits for 4096 bytes */
 #define F2FS_LOG_SECTORS_PER_BLOCK	3	/* log number for sector/blk */
-#define F2FS_BLKSIZE			4096	/* support only 4KB block */
+#define F2FS_BLKSIZE			4096	/* support only 4KB block 仅支持4KB大小的block*/
 #define F2FS_BLKSIZE_BITS		12	/* bits for F2FS_BLKSIZE */
 #define F2FS_MAX_EXTENSION		64	/* # of extension entries */
 #define F2FS_BLK_ALIGN(x)	(((x) + F2FS_BLKSIZE - 1) >> F2FS_BLKSIZE_BITS)
@@ -29,7 +29,9 @@
 #define F2FS_BYTES_TO_BLK(bytes)	((bytes) >> F2FS_BLKSIZE_BITS)
 #define F2FS_BLK_TO_BYTES(blk)		((blk) << F2FS_BLKSIZE_BITS)
 
-/* 0, 1(node nid), 2(meta nid) are reserved node id */
+/* 0, 1(node nid), 2(meta nid) are reserved node id 
+	节点号0/1/2是保留节点，节点1用作node 号，节点2用作meta id
+*/
 #define F2FS_RESERVED_NODE_NUM		3
 
 #define F2FS_ROOT_INO(sbi)	(sbi->root_ino_num)
@@ -55,37 +57,48 @@
 
 /*
  * For superblock
+ 	超级块
  */
 struct f2fs_super_block {
 	__le32 magic;			/* Magic Number */
 	__le16 major_ver;		/* Major Version */
 	__le16 minor_ver;		/* Minor Version */
-	__le32 log_sectorsize;		/* log2 sector size in bytes */
-	__le32 log_sectors_per_block;	/* log2 # of sectors per block */
-	__le32 log_blocksize;		/* log2 block size in bytes */
-	__le32 log_blocks_per_seg;	/* log2 # of blocks per segment */
-	__le32 segs_per_sec;		/* # of segments per section */
-	__le32 secs_per_zone;		/* # of sections per zone */
-	__le32 checksum_offset;		/* checksum offset inside super block */
-	__le64 block_count;		/* total # of user blocks */
-	__le32 section_count;		/* total # of sections */
-	__le32 segment_count;		/* total # of segments */
-	__le32 segment_count_ckpt;	/* # of segments for checkpoint */
-	__le32 segment_count_sit;	/* # of segments for SIT */
-	__le32 segment_count_nat;	/* # of segments for NAT */
-	__le32 segment_count_ssa;	/* # of segments for SSA */
-	__le32 segment_count_main;	/* # of segments for main area */
+
+	/* log开头指的是：大小取对数 */
+	__le32 log_sectorsize;		/* log2 sector size in bytes ，（sector大小支持0.5KB-4KB，这里以0.5KB为例）每一个sector=0.5KB=512B，取对数后，值=9*/
+	__le32 log_sectors_per_block;	/* log2 # of sectors per block ，每个block大小=4KB = 8个sector，取对数后，值=3*/
+	__le32 log_blocksize;		/* log2 block size in bytes 、block大小（字节为单位）*/
+	__le32 log_blocks_per_seg;	/* log2 # of blocks per segment、 一个segment中block的数量 = 512个（2MB/4KB）,再取对数，值为9*/
+	
+	__le32 segs_per_sec;		/* # of segments per section 一个section中segment的数量 = 1*/
+	__le32 secs_per_zone;		/* # of sections per zone 一个zone中section的数量 = 1*/
+	__le32 checksum_offset;		/* checksum offset inside super block 、校验和所在超级块内的偏移量*/
+	__le64 block_count;		/* total # of user blocks、 block的总个数*/
+
+	/* 一般情况下，section =       segment */
+	__le32 section_count;		/* total # of sections、 section的总个数*/
+	__le32 segment_count;		/* total # of segments、 segment的总个数*/
+
+	/* CP/SIT/NAT/SSA/MAIN_AREA区域的segment数量 */
+	__le32 segment_count_ckpt;	/* # of segments for checkpoint、 checkpoint占据segment的个数*/
+	__le32 segment_count_sit;	/* # of segments for SIT 、SIT占据segment的个数*/
+	__le32 segment_count_nat;	/* # of segments for NAT 、NAT占据segment的个数*/
+	__le32 segment_count_ssa;	/* # of segments for SSA 、SSA占据segment的个数*/
+	__le32 segment_count_main;	/* # of segments for main area 、main area占据segment的个数*/
 	__le32 segment0_blkaddr;	/* start block address of segment 0 */
-	__le32 cp_blkaddr;		/* start block address of checkpoint */
+
+	/* CP/SIT/NAT/SSA/MAIN_AREA区域的起始块地址 */
+	__le32 cp_blkaddr;		/* start block address of checkpoint 起始块的地址*/
 	__le32 sit_blkaddr;		/* start block address of SIT */
 	__le32 nat_blkaddr;		/* start block address of NAT */
 	__le32 ssa_blkaddr;		/* start block address of SSA */
 	__le32 main_blkaddr;		/* start block address of main area */
-	__le32 root_ino;		/* root inode number */
-	__le32 node_ino;		/* node inode number */
-	__le32 meta_ino;		/* meta inode number */
+	
+	__le32 root_ino;		/* root inode number = 3*/
+	__le32 node_ino;		/* node inode number = 1*/
+	__le32 meta_ino;		/* meta inode number = 2*/
 	__u8 uuid[16];			/* 128-bit uuid for volume */
-	__le16 volume_name[MAX_VOLUME_NAME];	/* volume name */
+	__le16 volume_name[MAX_VOLUME_NAME];	/* volume name 卷名*/
 	__le32 extension_count;		/* # of extensions below */
 	__u8 extension_list[F2FS_MAX_EXTENSION][8];	/* extension array */
 	__le32 cp_payload;
@@ -110,12 +123,12 @@ struct f2fs_super_block {
 #define F2FS_CP_PACKS		2	/* # of checkpoint packs */
 
 struct f2fs_checkpoint {
-	__le64 checkpoint_ver;		/* checkpoint block version number */
+	__le64 checkpoint_ver;		/* checkpoint block version number 版本号*/
 	__le64 user_block_count;	/* # of user blocks */
 	__le64 valid_block_count;	/* # of valid blocks in main area */
 	__le32 rsvd_segment_count;	/* # of reserved segments for gc */
 	__le32 overprov_segment_count;	/* # of overprovision segments */
-	__le32 free_segment_count;	/* # of free segments in main area */
+	__le32 free_segment_count;	/* # of free segments in main area，主区域空闲segment的数量 */
 
 	/* information of current node segments */
 	__le32 cur_node_segno[MAX_ACTIVE_NODE_LOGS];
@@ -124,7 +137,7 @@ struct f2fs_checkpoint {
 	__le32 cur_data_segno[MAX_ACTIVE_DATA_LOGS];
 	__le16 cur_data_blkoff[MAX_ACTIVE_DATA_LOGS];
 	__le32 ckpt_flags;		/* Flags : umount and journal_present */
-	__le32 cp_pack_total_block_count;	/* total # of one cp pack */
+	__le32 cp_pack_total_block_count;	/* total # of one cp pack ，一个CP pack（segment）包含的block个数*/
 	__le32 cp_pack_start_sum;	/* start block number of data summary */
 	__le32 valid_node_count;	/* Total number of valid nodes */
 	__le32 valid_inode_count;	/* Total number of valid inodes */
@@ -136,12 +149,14 @@ struct f2fs_checkpoint {
 	/* allocation type of current segment */
 	unsigned char alloc_type[MAX_ACTIVE_LOGS];
 
-	/* SIT and NAT version bitmap */
+	/* SIT and NAT version bitmap 
+		SIT和NAT的位图：可以判断最新有效的NAT和SIT区域
+	*/
 	unsigned char sit_nat_version_bitmap[1];
 } __packed;
 
 /*
- * For orphan inode management
+ * For orphan（孤儿） inode management
  */
 #define F2FS_ORPHANS_PER_BLOCK	1020
 
@@ -158,21 +173,21 @@ struct f2fs_orphan_block {
 } __packed;
 
 /*
- * For NODE structure
+ * For NODE structure NODE结构
  */
 struct f2fs_extent {
 	__le32 fofs;		/* start file offset of the extent */
 	__le32 blk;		/* start block address of the extent */
-	__le32 len;		/* lengh of the extent */
+	__le32 len;		/* length of the extent */
 } __packed;
 
 #define F2FS_NAME_LEN		255
-#define F2FS_INLINE_XATTR_ADDRS	50	/* 200 bytes for inline xattrs */
-#define DEF_ADDRS_PER_INODE	923	/* Address Pointers in an Inode */
+#define F2FS_INLINE_XATTR_ADDRS	50	/* 200 bytes for inline xattrs 50个block用于内联属性*/
+#define DEF_ADDRS_PER_INODE	923	/* Address Pointers in an Inode、 inode中有923个数据块索引指针，直接指向data block*/
 #define DEF_NIDS_PER_INODE	5	/* Node IDs in an Inode */
 #define ADDRS_PER_INODE(inode)	addrs_per_inode(inode)
-#define ADDRS_PER_BLOCK		1018	/* Address Pointers in a Direct Block */
-#define NIDS_PER_BLOCK		1018	/* Node IDs in an Indirect Block */
+#define ADDRS_PER_BLOCK		1018	/* Address Pointers in a Direct Block 、一个一级索引块(直接 node )包含1018个数据块指针*/
+#define NIDS_PER_BLOCK		1018	/* Node IDs in an Indirect Block、 一个二级索引块(间接 node )包含1018个一级索引块(直接 node )指针*/
 
 #define ADDRS_PER_PAGE(page, inode)	\
 	(IS_INODE(page) ? ADDRS_PER_INODE(inode) : ADDRS_PER_BLOCK)
@@ -192,15 +207,16 @@ struct f2fs_extent {
 #define MAX_INLINE_DATA		(sizeof(__le32) * (DEF_ADDRS_PER_INODE - \
 						F2FS_INLINE_XATTR_ADDRS - 1))
 
+/* inode */
 struct f2fs_inode {
-	__le16 i_mode;			/* file mode */
+	__le16 i_mode;			/* file mode 文件模式*/
 	__u8 i_advise;			/* file hints */
 	__u8 i_inline;			/* file inline flags */
 	__le32 i_uid;			/* user ID */
 	__le32 i_gid;			/* group ID */
-	__le32 i_links;			/* links count */
-	__le64 i_size;			/* file size in bytes */
-	__le64 i_blocks;		/* file size in blocks */
+	__le32 i_links;			/* links count 链接计数*/
+	__le64 i_size;			/* file size in bytes 长度（按字节计算）*/
+	__le64 i_blocks;		/* file size in blocks 长度（按block计算）*/
 	__le64 i_atime;			/* access time */
 	__le64 i_ctime;			/* change time */
 	__le64 i_mtime;			/* modification time */
@@ -208,28 +224,33 @@ struct f2fs_inode {
 	__le32 i_ctime_nsec;		/* change time in nano scale */
 	__le32 i_mtime_nsec;		/* modification time in nano scale */
 	__le32 i_generation;		/* file version (for NFS) */
-	__le32 i_current_depth;		/* only for directory depth */
+	__le32 i_current_depth;		/* only for directory depth 目录深度*/
 	__le32 i_xattr_nid;		/* nid to save xattr */
 	__le32 i_flags;			/* file attributes */
-	__le32 i_pino;			/* parent inode number */
-	__le32 i_namelen;		/* file name length */
-	__u8 i_name[F2FS_NAME_LEN];	/* file name for SPOR */
+	__le32 i_pino;			/* parent inode number 父节点的inode编号*/
+	__le32 i_namelen;		/* file name length 文件名的长度*/
+	__u8 i_name[F2FS_NAME_LEN];	/* file name for SPOR 文件名*/
 	__u8 i_dir_level;		/* dentry_level for large dir */
 
 	struct f2fs_extent i_ext;	/* caching a largest extent */
 
-	__le32 i_addr[DEF_ADDRS_PER_INODE];	/* Pointers to data blocks */
+	__le32 i_addr[DEF_ADDRS_PER_INODE];	/* Pointers to data blocks 直接指向data block，一共923个指针*/
 
 	__le32 i_nid[DEF_NIDS_PER_INODE];	/* direct(2), indirect(2),
-						double_indirect(1) node id */
+						double_indirect(1) node id 
+						两个一级索引块(直接 node )指针，
+						两个二级索引块(间接 node )指针，
+						以及一个三级索引块(二级间接 node)指针*/
 } __packed;
 
+/* 直接node */
 struct direct_node {
-	__le32 addr[ADDRS_PER_BLOCK];	/* array of data block address */
+	__le32 addr[ADDRS_PER_BLOCK];	/* array of data block address =1018个指向inode的指针*/
 } __packed;
 
+/* 间接node */
 struct indirect_node {
-	__le32 nid[NIDS_PER_BLOCK];	/* array of data block address */
+	__le32 nid[NIDS_PER_BLOCK];	/* array of data block address =1018个指向直接node的指针*/
 } __packed;
 
 enum {
@@ -250,7 +271,9 @@ struct node_footer {
 } __packed;
 
 struct f2fs_node {
-	/* can be one of three types: inode, direct, and indirect types */
+	/* can be one of three types: inode, direct, and indirect types 
+		node可以有三种类型：inode、直接node和间接node
+	*/
 	union {
 		struct f2fs_inode i;
 		struct direct_node dn;
@@ -261,15 +284,18 @@ struct f2fs_node {
 
 /*
  * For NAT entries
+ 	NAT表，node ID映射到对应的node block地址
  */
+ /* 每个block中有多少个nat entry */
 #define NAT_ENTRY_PER_BLOCK (PAGE_SIZE / sizeof(struct f2fs_nat_entry))
 
 struct f2fs_nat_entry {
-	__u8 version;		/* latest version of cached nat entry */
-	__le32 ino;		/* inode number */
-	__le32 block_addr;	/* block address */
+	__u8 version;		/* latest version of cached nat entry，nat entry的版本号 */
+	__le32 ino;		/* inode number 、node号*/
+	__le32 block_addr;	/* block address 对应的node block地址*/
 } __packed;
 
+/* NAT block中有若干个nat entry */
 struct f2fs_nat_block {
 	struct f2fs_nat_entry entries[NAT_ENTRY_PER_BLOCK];
 } __packed;
@@ -279,9 +305,11 @@ struct f2fs_nat_block {
  *
  * Each segment is 2MB in size by default so that a bitmap for validity of
  * there-in blocks should occupy 64 bytes, 512 bits.
+ 对于一个segment中有512个block，每一个block占据bitmap中一个bit，一共需要512bit。
  * Not allow to change this.
  */
-#define SIT_VBLOCK_MAP_SIZE 64
+#define SIT_VBLOCK_MAP_SIZE 64  /* 一个segment的比特位占据bitmap中的64字节 */
+/* 每个block中有多少个sit entry */
 #define SIT_ENTRY_PER_BLOCK (PAGE_SIZE / sizeof(struct f2fs_sit_entry))
 
 /*
@@ -291,24 +319,30 @@ struct f2fs_nat_block {
  */
 #define SIT_VBLOCKS_SHIFT	10
 #define SIT_VBLOCKS_MASK	((1 << SIT_VBLOCKS_SHIFT) - 1)
+/* 由f2fs_sit_entry->vblocks的前[9:0]获取到有效块的数目 */
 #define GET_SIT_VBLOCKS(raw_sit)				\
 	(le16_to_cpu((raw_sit)->vblocks) & SIT_VBLOCKS_MASK)
+/* 由f2fs_sit_entry->vblocks的前[15:10]获取到申请的类型 */
 #define GET_SIT_TYPE(raw_sit)					\
 	((le16_to_cpu((raw_sit)->vblocks) & ~SIT_VBLOCKS_MASK)	\
 	 >> SIT_VBLOCKS_SHIFT)
 
+/* 共74字节 */
 struct f2fs_sit_entry {
-	__le16 vblocks;				/* reference above */
-	__u8 valid_map[SIT_VBLOCK_MAP_SIZE];	/* bitmap for valid blocks */
-	__le64 mtime;				/* segment age for cleaning */
+	__le16 vblocks;				/* reference above 被使用的block的数目*/
+	__u8 valid_map[SIT_VBLOCK_MAP_SIZE];	/* bitmap for valid blocks 跟踪一个segment中的数据块是否有效的位图*/
+	__le64 mtime;				/* segment age for cleaning 记录segment的年龄，在cost-benifit清理算法中有用*/
 } __packed;
 
+/* SIT block中有若干个sit entry */
 struct f2fs_sit_block {
 	struct f2fs_sit_entry entries[SIT_ENTRY_PER_BLOCK];
 } __packed;
 
 /*
  * For segment summary
+
+ summary 项中包含存储在 Main 区域的所有数据（data block）和节点块( node blocks)的所有者信息
  *
  * One summary block contains exactly 512 summary entries, which represents
  * exactly 2MB segment by default. Not allow to change the basic units.
@@ -322,19 +356,27 @@ struct f2fs_sit_block {
  * from node's page's beginning to get a data block address.
  * ex) data_blkaddr = (block_t)(nodepage_start_address + ofs_in_node)
  */
-#define ENTRIES_IN_SUM		512
+#define ENTRIES_IN_SUM		512  /* 每个block中有512个summary entry */
 #define	SUMMARY_SIZE		(7)	/* sizeof(struct summary) */
 #define	SUM_FOOTER_SIZE		(5)	/* sizeof(struct summary_footer) */
 #define SUM_ENTRY_SIZE		(SUMMARY_SIZE * ENTRIES_IN_SUM)
 
-/* a summary entry for a 4KB-sized block in a segment */
+/* a summary entry for a 4KB-sized block in a segment 
+	一个segment中的单个block的总结信息：包括拥有该block的父node的ID和在父node中的偏移
+*/
+/* The SSA entries identify parent node blocks before migrating valid blocks during cleaning. */
 struct f2fs_summary {
-	__le32 nid;		/* parent node id */
+	/*
+		If data block, nid represents dnode's nid
+		If node block, nid represents the node block's nid.
+	*/
+	__le32 nid;		/* parent node id （父node指的是该block的所有者的node） 上一级node的id号；如果是data block，上一级node是direct node；
+						如果是node block，则上一级node是node block的id*/
 	union {
 		__u8 reserved[3];
 		struct {
 			__u8 version;		/* node version number */
-			__le16 ofs_in_node;	/* block index in parent node */
+			__le16 ofs_in_node;	/* block index in parent node ，在父node中的偏移*/
 		} __packed;
 	};
 } __packed;
@@ -344,7 +386,7 @@ struct f2fs_summary {
 #define SUM_TYPE_DATA		(0)
 
 struct summary_footer {
-	unsigned char entry_type;	/* SUM_TYPE_XXX */
+	unsigned char entry_type;	/* SUM_TYPE_XXX ,summary block的类型（NODE OR DATA）*/
 	__le32 check_sum;		/* summary checksum */
 } __packed;
 
@@ -367,15 +409,19 @@ struct summary_footer {
 /*
  * frequently updated NAT/SIT entries can be stored in the spare area in
  * summary blocks
+ journal机制：
+ 	如果频繁更新NAT/SIT区域，为了提高性能和SSD寿命，将对NAT/SIT的更新写入
+ 	summary block中；在checkpoint时，才写入到磁盘。
  */
 enum {
-	NAT_JOURNAL = 0,
-	SIT_JOURNAL
+	NAT_JOURNAL = 0,  //NAT的journal
+	SIT_JOURNAL       //SIT的journal
 };
 
+/* 如果要对NAT更新，则先不更新NAT，首先将更新写到summary block中的journal中，最后再写到NAT中 */
 struct nat_journal_entry {
-	__le32 nid;
-	struct f2fs_nat_entry ne;
+	__le32 nid;   //node号
+	struct f2fs_nat_entry ne;  //要修改的nat entry；先不修改NAT，保存在journal，在checkpoint时才更新NAT
 } __packed;
 
 struct nat_journal {
@@ -384,7 +430,7 @@ struct nat_journal {
 } __packed;
 
 struct sit_journal_entry {
-	__le32 segno;
+	__le32 segno;  //segment号
 	struct f2fs_sit_entry se;
 } __packed;
 
@@ -398,6 +444,7 @@ struct f2fs_extra_info {
 	__u8 reserved[EXTRA_INFO_RESERVED];
 } __packed;
 
+/* f2fs的journal机制 */
 struct f2fs_journal {
 	union {
 		__le16 n_nats;
@@ -411,15 +458,29 @@ struct f2fs_journal {
 	};
 } __packed;
 
-/* 4KB-sized summary block structure */
+/*
+	f2fs中的journal机制
+	由于f2fs的log-structure特性，每次写一个数据块，需要相应更改direct node，NAT和SIT，
+	尤其是NAT和SIT区域，可能仅仅需要修改一个entry几个字节的信息，就要重写整个page，
+	这会严重降低文件系统的性能和SSD的使用寿命.
+
+	因此，f2fs使用了journal的机制来减少NAT和SIT的写次数。
+	所谓journal，其实就是把NAT和SIT的更改写到f2fs_summary_block中，当写checkpoint时，
+	才把dirty的SIT和NAT区域回写。
+*/
+/* 4KB-sized summary block structure 
+	一共4KB大小的结构，正好占据一整个block
+*/
 struct f2fs_summary_block {
-	struct f2fs_summary entries[ENTRIES_IN_SUM];
+	/* The SSA entries identify parent node blocks before migrating valid blocks during cleaning. */
+	struct f2fs_summary entries[ENTRIES_IN_SUM];  /* 每个block中有512个summary entry */
 	struct f2fs_journal journal;
 	struct summary_footer footer;
 } __packed;
 
 /*
  * For directory operations
+ 	f2fs目录操作
  */
 #define F2FS_DOT_HASH		0
 #define F2FS_DDOT_HASH		F2FS_DOT_HASH
@@ -452,29 +513,29 @@ typedef __le32	f2fs_hash_t;
  * Note: there are more reserved space in inline dentry than in regular
  * dentry, when converting inline dentry we should handle this carefully.
  */
-#define NR_DENTRY_IN_BLOCK	214	/* the number of dentry in a block */
-#define SIZE_OF_DIR_ENTRY	11	/* by byte */
+#define NR_DENTRY_IN_BLOCK	214	/* the number of dentry in a block 一个block中有214个dentry项*/
+#define SIZE_OF_DIR_ENTRY	11	/* by byte 每一个dentry的大小（字节）*/
 #define SIZE_OF_DENTRY_BITMAP	((NR_DENTRY_IN_BLOCK + BITS_PER_BYTE - 1) / \
-					BITS_PER_BYTE)
+					BITS_PER_BYTE)  //bitmap 占据27字节
 #define SIZE_OF_RESERVED	(PAGE_SIZE - ((SIZE_OF_DIR_ENTRY + \
 				F2FS_SLOT_LEN) * \
 				NR_DENTRY_IN_BLOCK + SIZE_OF_DENTRY_BITMAP))
 
 /* One directory entry slot representing F2FS_SLOT_LEN-sized file name */
 struct f2fs_dir_entry {
-	__le32 hash_code;	/* hash code of file name */
-	__le32 ino;		/* inode number */
-	__le16 name_len;	/* lengh of file name */
-	__u8 file_type;		/* file type */
+	__le32 hash_code;	/* hash code of file name 文件名的hash值*/
+	__le32 ino;		/* inode number inode号*/
+	__le16 name_len;	/* lengh of file name 文件名的长度*/
+	__u8 file_type;		/* file type 文件类型 */
 } __packed;
 
 /* 4KB-sized directory entry block */
 struct f2fs_dentry_block {
 	/* validity bitmap for directory entries in each block */
-	__u8 dentry_bitmap[SIZE_OF_DENTRY_BITMAP];
+	__u8 dentry_bitmap[SIZE_OF_DENTRY_BITMAP];  //标记目录项是否有效的位图，共27个字节
 	__u8 reserved[SIZE_OF_RESERVED];
-	struct f2fs_dir_entry dentry[NR_DENTRY_IN_BLOCK];
-	__u8 filename[NR_DENTRY_IN_BLOCK][F2FS_SLOT_LEN];
+	struct f2fs_dir_entry dentry[NR_DENTRY_IN_BLOCK];  //每个block中有214个dentry项，也就是slot槽
+	__u8 filename[NR_DENTRY_IN_BLOCK][F2FS_SLOT_LEN];  //保存文件名的数组，每个文件名大小为8字节
 } __packed;
 
 /* for inline dir */
@@ -495,7 +556,9 @@ struct f2fs_inline_dentry {
 	__u8 filename[NR_INLINE_DENTRY][F2FS_SLOT_LEN];
 } __packed;
 
-/* file types used in inode_info->flags */
+/* file types used in inode_info->flags 
+	文件类型：在inode_info->flags中使用
+*/
 enum {
 	F2FS_FT_UNKNOWN,
 	F2FS_FT_REG_FILE,

@@ -45,6 +45,7 @@ enum {
 
 /*
  * For node information
+ 	F2FS中的node节点信息
  */
 struct node_info {
 	nid_t nid;		/* node id */
@@ -307,6 +308,10 @@ static inline block_t next_blkaddr_of_node(struct page *node_page)
  *                 ......
  *                 `- indirect node ((6 + 2N) + (N - 1)(N + 1))
  *                       `- direct node
+ */
+ /* 
+ 	判断page是不是dnode；dnode就是上面所说的direct node
+	只有编号ofs符合dnode的条件，才返回true；否则，返回false
  */
 static inline bool IS_DNODE(struct page *node_page)
 {

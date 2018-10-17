@@ -1866,6 +1866,7 @@ long f2fs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	}
 }
 
+/* f2fs 写文件入口 */
 static ssize_t f2fs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	struct file *file = iocb->ki_filp;
@@ -1878,10 +1879,13 @@ static ssize_t f2fs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		return -EACCES;
 
 	inode_lock(inode);
+	/* 写之前进行必要的检查，一般ret>0 */
 	ret = generic_write_checks(iocb, from);
 	if (ret > 0) {
+		/* 预申请块 */
 		ret = f2fs_preallocate_blocks(iocb, from);
 		if (!ret)
+			/* 执行文件写入，一般写入到页缓存，稍后再同步到磁盘中 */
 			ret = __generic_file_write_iter(iocb, from);
 	}
 	inode_unlock(inode);
@@ -1889,6 +1893,9 @@ static ssize_t f2fs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (ret > 0) {
 		ssize_t err;
 
+		/* 同步操作，将页缓存的数据刷新到磁盘上；
+			参数ret:写入的字节数
+		*/
 		err = generic_write_sync(file, iocb->ki_pos - ret, ret);
 		if (err < 0)
 			ret = err;
@@ -1931,12 +1938,12 @@ long f2fs_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 const struct file_operations f2fs_file_operations = {
 	.llseek		= f2fs_llseek,
-	.read_iter	= generic_file_read_iter,
-	.write_iter	= f2fs_file_write_iter,
+	.read_iter	= generic_file_read_iter,  //读文件
+	.write_iter	= f2fs_file_write_iter,    //写文件
 	.open		= f2fs_file_open,
 	.release	= f2fs_release_file,
 	.mmap		= f2fs_file_mmap,
-	.fsync		= f2fs_sync_file,
+	.fsync		= f2fs_sync_file,  //文件同步到磁盘方法
 	.fallocate	= f2fs_fallocate,
 	.unlocked_ioctl	= f2fs_ioctl,
 #ifdef CONFIG_COMPAT

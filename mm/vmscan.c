@@ -913,6 +913,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		page = lru_to_page(page_list);
 		list_del(&page->lru);
 
+		/*如果页面被锁住了，放入继续将页面保留在inactive list中，后就再扫描到底时候再试图回收这些page*/
 		if (!trylock_page(page))
 			goto keep;
 
@@ -992,6 +993,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		 *    pages are in writeback and there is nothing else to
 		 *    reclaim. Wait for the writeback to complete.
 		 */
+		 /*对于正在回写中的页面，如果是同步操作，等待页面回写完成。如果是异步操作，将page继续留在inactive list中，等待以后扫描再回收释放*/
 		if (PageWriteback(page)) {
 			/* Case 1 above */
 			if (current_is_kswapd() &&
@@ -1041,6 +1043,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			; /* try to reclaim the page below */
 		}
 
+		/*如果是匿名页面，并且不在swap缓冲区中，将page加入到swap的缓冲区中。*/
 		/*
 		 * Anonymous process memory has backing store?
 		 * Try to allocate it some swap space here.

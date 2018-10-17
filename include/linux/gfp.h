@@ -41,9 +41,16 @@ struct vm_area_struct;
 #define ___GFP_OTHER_NODE	0x800000u
 #define ___GFP_WRITE		0x1000000u
 #define ___GFP_KSWAPD_RECLAIM	0x2000000u
+
+/*ADD*/
+#define ___GFP_DRAM		0x4000000u
+#define ___GFP_NVM		0x8000000u
+/*end ADD*/
+
 /* If the above are modified, __GFP_BITS_SHIFT may need updating */
 
 /*
+	gfp_mask的低地位表示内存域修饰符，默认是__GFP_NORMAL
  * Physical address zone modifiers (see linux/mmzone.h - low four bits)
  *
  * Do not put any conditional on these. If necessary modify the definitions
@@ -187,8 +194,17 @@ struct vm_area_struct;
 #define __GFP_NOTRACK_FALSE_POSITIVE (__GFP_NOTRACK)
 #define __GFP_OTHER_NODE ((__force gfp_t)___GFP_OTHER_NODE)
 
+/*ADD*/
+#define __GFP_DRAM ((__force gfp_t)___GFP_DRAM)
+#define __GFP_NVM ((__force gfp_t)___GFP_NVM)
+/*end ADD*/
+
+
 /* Room for N __GFP_FOO bits */
-#define __GFP_BITS_SHIFT 26
+//#define __GFP_BITS_SHIFT 26
+/*ADD*/
+#define __GFP_BITS_SHIFT 28
+/*end ADD*/
 #define __GFP_BITS_MASK ((__force gfp_t)((1 << __GFP_BITS_SHIFT) - 1))
 
 /*
@@ -383,6 +399,17 @@ static inline enum zone_type gfp_zone(gfp_t flags)
 	VM_BUG_ON((GFP_ZONE_BAD >> bit) & 1);
 	return z;
 }
+
+/*ADD*/
+/* 在申请页框时，判断gfp_mask中的标志位 */
+static inline bool gfp_to_DRAM_or_NVM(gfp_t flags)
+{
+	if(!(flags & __GFP_DRAM) && (flags & __GFP_NVM))  //__GFP_DRAM未设置且__GFP_NVM设置了，申请NVM页面
+		return false;
+	else   //申请DRAM，两个标志位同时设置时，以__GFP_DRAM为准
+		return true;
+}
+/*end ADD*/
 
 /*
  * There is only one page-allocator function, and two main namespaces to

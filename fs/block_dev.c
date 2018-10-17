@@ -32,6 +32,10 @@
 #include <asm/uaccess.h>
 #include "internal.h"
 
+/* 将bdev伪文件系统的inode和对应的块设备文件block_device相关联
+	可以由其中的inode获得对应的bdev_inode对象，最后得到inode对应的block_device对象
+	函数BDEV_I()和I_BDEV()就是实现该功能的
+*/
 struct bdev_inode {
 	struct block_device bdev;
 	struct inode vfs_inode;
@@ -630,21 +634,28 @@ static int bdev_set(struct inode *inode, void *data)
 	return 0;
 }
 
+/* all_bdevs维护着所有的块设备描述符block_device，是一个全局链表 */
 static LIST_HEAD(all_bdevs);
 
+/* 由块设备的主、从设备号Dev获得对应的块设备描述符block_device 
+	从bdev文件系统中查找相关的inode，如果不存在，则分配一个新的inode和新的block_device；
+*/
 struct block_device *bdget(dev_t dev)
 {
 	struct block_device *bdev;
 	struct inode *inode;
 
+	/* 从bdev文件系统中查找相关的inode，如果不存在，则分配一个新的inode和新的block_device； */
 	inode = iget5_locked(blockdev_superblock, hash(dev),
 			bdev_test, bdev_set, &dev);
 
 	if (!inode)
 		return NULL;
 
+	/* 获得inode对应的块设备描述符 */
 	bdev = &BDEV_I(inode)->bdev;
 
+	/* 如果该inode是新创建的，bdev必定是空的，现在需要对他初始化 */
 	if (inode->i_state & I_NEW) {
 		bdev->bd_contains = NULL;
 		bdev->bd_super = NULL;
@@ -658,7 +669,7 @@ struct block_device *bdget(dev_t dev)
 		inode->i_data.a_ops = &def_blk_aops;
 		mapping_set_gfp_mask(&inode->i_data, GFP_USER);
 		spin_lock(&bdev_lock);
-		list_add(&bdev->bd_list, &all_bdevs);
+		list_add(&bdev->bd_list, &all_bdevs);   //将该块设备加入到全局的块设备描述符链表all_bdevs中
 		spin_unlock(&bdev_lock);
 		unlock_new_inode(inode);
 	}
@@ -1409,6 +1420,7 @@ int blkdev_get(struct block_device *bdev, fmode_t mode, void *holder)
 EXPORT_SYMBOL(blkdev_get);
 
 /**
+	依据path查找对应的块设备
  * blkdev_get_by_path - open a block device by name
  * @path: path to the block device to open
  * @mode: FMODE_* mask
@@ -1431,6 +1443,7 @@ struct block_device *blkdev_get_by_path(const char *path, fmode_t mode,
 	struct block_device *bdev;
 	int err;
 
+	/* 查找块设备 */
 	bdev = lookup_bdev(path);
 	if (IS_ERR(bdev))
 		return bdev;
@@ -1487,6 +1500,7 @@ struct block_device *blkdev_get_by_dev(dev_t dev, fmode_t mode, void *holder)
 }
 EXPORT_SYMBOL(blkdev_get_by_dev);
 
+/* 打开一个块设备文件 */
 static int blkdev_open(struct inode * inode, struct file * filp)
 {
 	struct block_device *bdev;
@@ -1512,6 +1526,7 @@ static int blkdev_open(struct inode * inode, struct file * filp)
 
 	filp->f_mapping = bdev->bd_inode->i_mapping;
 
+	/* 打开一个块设备文件 */
 	return blkdev_get(bdev, filp->f_mode, filp);
 }
 

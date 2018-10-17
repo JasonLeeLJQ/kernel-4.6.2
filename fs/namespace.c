@@ -2378,6 +2378,8 @@ unlock:
 static bool fs_fully_visible(struct file_system_type *fs_type, int *new_mnt_flags);
 
 /*
+   正常的mount操作，完成具体的mount操作  
+
  * create a new mount for userspace and request it to be added into the
  * namespace's tree
  */
@@ -2392,6 +2394,7 @@ static int do_new_mount(struct path *path, const char *fstype, int flags,
 	if (!fstype)
 		return -EINVAL;
 
+	/* 获取到file_system_type */
 	type = get_fs_type(fstype);
 	if (!type)
 		return -ENODEV;
@@ -2414,6 +2417,7 @@ static int do_new_mount(struct path *path, const char *fstype, int flags,
 		}
 	}
 
+	/* 在内核建立vfsmount对象和superblock对象 */  
 	mnt = vfs_kern_mount(type, flags, name, data);
 	if (!IS_ERR(mnt) && (type->fs_flags & FS_HAS_SUBTYPE) &&
 	    !mnt->mnt_sb->s_subtype)
@@ -2422,7 +2426,7 @@ static int do_new_mount(struct path *path, const char *fstype, int flags,
 	put_filesystem(type);
 	if (IS_ERR(mnt))
 		return PTR_ERR(mnt);
-
+	 /* 将vfsmount对象加入系统，屏蔽原有dentry对象 */  
 	err = do_add_mount(real_mount(mnt), path, mnt_flags);
 	if (err)
 		mntput(mnt);
@@ -2676,6 +2680,7 @@ long do_mount(const char *dev_name, const char __user *dir_name,
 		((char *)data_page)[PAGE_SIZE - 1] = 0;
 
 	/* ... and get the mountpoint */
+	 /* 通过mount目录字符串获取path，path结构中包含有mount目录的dentry目录对象 */  
 	retval = user_path(dir_name, &path);
 	if (retval)
 		return retval;
@@ -2731,6 +2736,7 @@ long do_mount(const char *dev_name, const char __user *dir_name,
 	else if (flags & MS_MOVE)
 		retval = do_move_mount(&path, dev_name);
 	else
+		 /* 正常的mount操作，完成具体的mount操作 */  
 		retval = do_new_mount(&path, type_page, flags, mnt_flags,
 				      dev_name, data_page);
 dput_out:

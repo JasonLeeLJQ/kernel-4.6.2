@@ -23,6 +23,19 @@
 struct address_space;
 struct mem_cgroup;
 
+/*ADD*/
+/* 添加page_short结构的slub缓存 */
+struct kmem_cache *page_short_cachep;
+
+/* 申请page_short结构一个kmem_cache */
+page_short_cachep = kmem_cache_create("page_short_cachep",
+			sizeof(struct page_short), 0,
+			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_NOTRACK|SLAB_ACCOUNT,
+			NULL);
+
+/*end ADD*/
+
+
 #define USE_SPLIT_PTE_PTLOCKS	(NR_CPUS >= CONFIG_SPLIT_PTLOCK_CPUS)
 #define USE_SPLIT_PMD_PTLOCKS	(USE_SPLIT_PTE_PTLOCKS && \
 		IS_ENABLED(CONFIG_ARCH_ENABLE_SPLIT_PMD_PTLOCK))
@@ -216,6 +229,7 @@ struct page {
 	int _last_cpupid;
 #endif
 }
+
 /*
  * The struct page can be forced to be double word aligned so that atomic ops
  * on double words work. The SLUB allocator can make use of such a feature.
@@ -224,6 +238,31 @@ struct page {
 	__aligned(2 * sizeof(unsigned long))
 #endif
 ;
+
+/*ADD*/
+/* 在原始的page结构上重新包装一个新的page结构，添加一些标志位 
+ * 用于zone中的4个CLOCK链表 
+ */
+struct page_short {
+	bool refer_bit;
+	bool dirty_bit;
+	bool sugg_bit;
+	bool source_bit;
+	struct page *page;       //
+	struct list_head clock;  //clock链表
+};
+
+/*新增page_history结构，用于历史队列中
+	index：该page在实际文件中的索引位置，需要记录下来，用来比较是否是同一位置
+*/
+struct page_history {
+	bool sugg_bit;
+	bool source_bit;
+	pgoff_t index;
+	struct list_head lru;  //历史队列的lru链表
+};
+/*end ADD*/
+
 
 struct page_frag {
 	struct page *page;

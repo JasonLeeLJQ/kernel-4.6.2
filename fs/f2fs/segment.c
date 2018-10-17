@@ -855,13 +855,18 @@ bool is_checkpointed_data(struct f2fs_sb_info *sbi, block_t blkaddr)
 
 /*
  * This function should be resided under the curseg_mutex lock
+ 	更新当前summary block中的一个summary entry，也就是更新一个f2fs_summary结构
  */
 static void __add_sum_entry(struct f2fs_sb_info *sbi, int type,
 					struct f2fs_summary *sum)
 {
 	struct curseg_info *curseg = CURSEG_I(sbi, type);
-	void *addr = curseg->sum_blk;
+	void *addr = curseg->sum_blk;  //获取到当前segment的f2fs_summary_block结构
+
+	/* 通过偏移量找到下一次要写入块所对应的f2fs_summary结构（线性对应的） */
 	addr += curseg->next_blkoff * sizeof(struct f2fs_summary);
+
+	/* 更新f2fs_summary结构：将旧的f2fs_summary结构拷贝给新的f2fs_summary结构 */
 	memcpy(addr, sum, sizeof(struct f2fs_summary));
 }
 
@@ -959,6 +964,7 @@ static int is_next_segment_free(struct f2fs_sb_info *sbi, int type)
 }
 
 /*
+	在free_segmap_info位图中查找新的segment
  * Find a new segment from the free segments bitmap to right order
  * This function should be returned with success, otherwise BUG
  */
@@ -1087,9 +1093,12 @@ static void new_curseg(struct f2fs_sb_info *sbi, int type, bool new_sec)
 	if (test_opt(sbi, NOHEAP))
 		dir = ALLOC_RIGHT;
 
+	/* 在空闲segment位图中查找新的segment，
+		segno ：新申请的segment号
+	*/
 	get_new_segment(sbi, &segno, new_sec, dir);
-	curseg->next_segno = segno;
-	reset_curseg(sbi, type, 1);
+	curseg->next_segno = segno; 
+	reset_curseg(sbi, type, 1);  //重新设置curseg，将segno设置为刚刚申请的segment号
 	curseg->alloc_type = LFS;
 }
 
@@ -1184,6 +1193,7 @@ static void allocate_segment_by_default(struct f2fs_sb_info *sbi,
 {
 	struct curseg_info *curseg = CURSEG_I(sbi, type);
 
+	/* 申请新的segment，则segment的描述信息curseg_info也要改变 */
 	if (force)
 		new_curseg(sbi, type, true);
 	else if (type == CURSEG_WARM_NODE)
@@ -1298,18 +1308,26 @@ static int __get_segment_type_4(struct page *page, enum page_type p_type)
 	}
 }
 
+/* 确定segment的type */
 static int __get_segment_type_6(struct page *page, enum page_type p_type)
 {
+	/* p_type有三种type：DATA、NODE、META*/
 	if (p_type == DATA) {
 		struct inode *inode = page->mapping->host;
 
-		if (S_ISDIR(inode->i_mode))
+		if (S_ISDIR(inode->i_mode))  //目录文件是HOT DATA
 			return CURSEG_HOT_DATA;
 		else if (is_cold_data(page) || file_is_cold(inode))
 			return CURSEG_COLD_DATA;
 		else
 			return CURSEG_WARM_DATA;
 	} else {
+		/* 判断该page对应的NODE是不是dnode（dnode是direct node，直接指向data block）
+			如果是dnode，且dnode是冷的，标记为WARM NODE，否则标记为HOT NODE；
+			其他类型的node，标记为COLD NODE
+
+			这是因为dnode经常被更新，所以设置为HOT或WARM
+		*/
 		if (IS_DNODE(page))
 			return is_cold_node(page) ? CURSEG_WARM_NODE :
 						CURSEG_HOT_NODE;
@@ -1318,6 +1336,7 @@ static int __get_segment_type_6(struct page *page, enum page_type p_type)
 	}
 }
 
+/* 确定segment的type */
 static int __get_segment_type(struct page *page, enum page_type p_type)
 {
 	switch (F2FS_P_SB(page)->active_logs) {
@@ -1332,6 +1351,7 @@ static int __get_segment_type(struct page *page, enum page_type p_type)
 	return __get_segment_type_6(page, p_type);
 }
 
+/* 从type类型对应的当前segment中，申请一个空闲block，空闲block的地址保存在fio->new_blkaddr */
 void allocate_data_block(struct f2fs_sb_info *sbi, struct page *page,
 		block_t old_blkaddr, block_t *new_blkaddr,
 		struct f2fs_summary *sum, int type)
@@ -1342,7 +1362,8 @@ void allocate_data_block(struct f2fs_sb_info *sbi, struct page *page,
 
 	type = direct_io ? CURSEG_WARM_DATA : type;
 
-	curseg = CURSEG_I(sbi, type);
+	/* 通过type得到type类型的segment */
+	curseg = CURSEG_I(sbi, type);  
 
 	mutex_lock(&curseg->curseg_mutex);
 	mutex_lock(&sit_i->sentry_lock);
@@ -1350,8 +1371,10 @@ void allocate_data_block(struct f2fs_sb_info *sbi, struct page *page,
 	/* direct_io'ed data is aligned to the segment for better performance */
 	if (direct_io && curseg->next_blkoff &&
 				!has_not_enough_free_secs(sbi, 0))
+		/* 当前segment中没有足够的block，则申请新的segment */
 		__allocate_new_segments(sbi, type);
 
+	/* 确定即将写入的新的块地址 */
 	*new_blkaddr = NEXT_FREE_BLKADDR(sbi, curseg);
 
 	/*
@@ -1359,12 +1382,15 @@ void allocate_data_block(struct f2fs_sb_info *sbi, struct page *page,
 	 * because, this function updates a summary entry in the
 	 * current summary block.
 	 */
+	 /* 更新当前summary block中的一个summary entry，也就是更新一个f2fs_summary结构 */
 	__add_sum_entry(sbi, type, sum);
 
+	/* 更新seg->next_blkoff，下一个要写入块的偏移量 */
 	__refresh_next_blkoff(sbi, curseg);
 
 	stat_inc_block_count(sbi, curseg);
 
+	/* 如果当前segment中没有足够的block，则申请新的type类型的segment */
 	if (!__has_curseg_space(sbi, type))
 		sit_i->s_ops->allocate_segment(sbi, type, false);
 	/*
@@ -1381,17 +1407,26 @@ void allocate_data_block(struct f2fs_sb_info *sbi, struct page *page,
 	mutex_unlock(&curseg->curseg_mutex);
 }
 
+/* f2fs 向磁盘写page */
 static void do_write_page(struct f2fs_summary *sum, struct f2fs_io_info *fio)
 {
+	/* 确定segment的type */
 	int type = __get_segment_type(fio->page, fio->type);
 
+	/* 从type类型对应的当前segment中，申请一个空闲block，空闲block的地址保存在fio->new_blkaddr */
 	allocate_data_block(fio->sbi, fio->page, fio->old_blkaddr,
 					&fio->new_blkaddr, sum, type);
 
-	/* writeout dirty page into bdev */
+	/* writeout dirty page into bdev 
+		提交bio请求，将fio->page写入到块设备的fio->new_blkaddr中
+	*/
 	f2fs_submit_page_mbio(fio);
 }
 
+/* 
+	对于meta区域，构造好fio之后，直接提交bio操作；
+	而main区域，则需要判断要写入的segment的类型，从相应segment申请block，最后再提交bio请求
+*/
 void write_meta_page(struct f2fs_sb_info *sbi, struct page *page)
 {
 	struct f2fs_io_info fio = {
@@ -1419,6 +1454,7 @@ void write_node_page(unsigned int nid, struct f2fs_io_info *fio)
 	do_write_page(&sum, fio);
 }
 
+/* 写入一个数据页 */
 void write_data_page(struct dnode_of_data *dn, struct f2fs_io_info *fio)
 {
 	struct f2fs_sb_info *sbi = fio->sbi;
@@ -1429,6 +1465,7 @@ void write_data_page(struct dnode_of_data *dn, struct f2fs_io_info *fio)
 	get_node_info(sbi, dn->nid, &ni);
 	set_summary(&sum, dn->nid, dn->ofs_in_node, ni.version);
 	do_write_page(&sum, fio);
+	/* 更新dnode中block的地址 */
 	f2fs_update_data_blkaddr(dn, fio->new_blkaddr);
 }
 
@@ -1798,11 +1835,16 @@ void write_node_summaries(struct f2fs_sb_info *sbi, block_t start_blk)
 	write_normal_summaries(sbi, start_blk, CURSEG_HOT_NODE);
 }
 
+/* 
+	在f2fs_journal中查找；
+	先搜索journal区域是否已经存在了相关的entry，如果存在了，则返回这个entry，否则，返回-1
+*/
 int lookup_journal_in_cursum(struct f2fs_journal *journal, int type,
 					unsigned int val, int alloc)
 {
 	int i;
 
+	/* NAT journal:遍历当前journal中所有的entry，判断nid（node节点号）是否匹配 */
 	if (type == NAT_JOURNAL) {
 		for (i = 0; i < nats_in_cursum(journal); i++) {
 			if (le32_to_cpu(nid_in_journal(journal, i)) == val)
@@ -1810,7 +1852,7 @@ int lookup_journal_in_cursum(struct f2fs_journal *journal, int type,
 		}
 		if (alloc && __has_cursum_space(journal, 1, NAT_JOURNAL))
 			return update_nats_in_cursum(journal, 1);
-	} else if (type == SIT_JOURNAL) {
+	} else if (type == SIT_JOURNAL) {  /* SIT journal:遍历当前journal中所有的entry，判断segno（segment号）是否匹配 */
 		for (i = 0; i < sits_in_cursum(journal); i++)
 			if (le32_to_cpu(segno_in_journal(journal, i)) == val)
 				return i;
@@ -1826,6 +1868,11 @@ static struct page *get_current_sit_page(struct f2fs_sb_info *sbi,
 	return get_meta_page(sbi, current_sit_addr(sbi, segno));
 }
 
+/*
+	f2fs有两个SIT（NAT）区域，一个是当前最新的数据，一个是当前checkpoint有效的数据，
+	get_next_sit_page把更新的数据写在了最新的那个区域，并返回这个page。
+	checkpoint完成后，最新区域成了checkpoint有效区域，而checkpoint有效区域成了更新的数据写入的区域。
+*/
 static struct page *get_next_sit_page(struct f2fs_sb_info *sbi,
 					unsigned int start)
 {
@@ -1938,6 +1985,7 @@ static void remove_sits_in_journal(struct f2fs_sb_info *sbi)
 }
 
 /*
+	写checkpoint的时候会触发对SIT，NAT的flush操作，从而把journa区域的NAT，SIT项回写到SSD上：
  * CP calls this function, which flushes SIT entries including sit_journal,
  * and moves prefree segs to free segs.
  */
@@ -1945,7 +1993,7 @@ void flush_sit_entries(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 {
 	struct sit_info *sit_i = SIT_I(sbi);
 	unsigned long *bitmap = sit_i->dirty_sentries_bitmap;
-	struct curseg_info *curseg = CURSEG_I(sbi, CURSEG_COLD_DATA);
+	struct curseg_info *curseg = CURSEG_I(sbi, CURSEG_COLD_DATA);  //当前活跃的segment
 	struct f2fs_journal *journal = curseg->journal;
 	struct sit_entry_set *ses, *tmp;
 	struct list_head *head = &SM_I(sbi)->sit_entry_set;
@@ -1954,7 +2002,7 @@ void flush_sit_entries(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 
 	mutex_lock(&sit_i->sentry_lock);
 
-	if (!sit_i->dirty_sentries)
+	if (!sit_i->dirty_sentries)  //没有脏的sit entry，直接返回
 		goto out;
 
 	/*
@@ -1975,10 +2023,14 @@ void flush_sit_entries(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 	 * there are two steps to flush sit entries:
 	 * #1, flush sit entries to journal in current cold data summary block.
 	 * #2, flush sit entries to sit page.
+
+	 第一步：将sit entry刷新到 current cold data summary block中
+	 第二步：将sit entry刷新到SIT中
 	 */
+	 /* 遍历所有的sit_entry_set，这些set以链表方式组织起来 */
 	list_for_each_entry_safe(ses, tmp, head, set_list) {
 		struct page *page = NULL;
-		struct f2fs_sit_block *raw_sit = NULL;
+		struct f2fs_sit_block *raw_sit = NULL;  //SIT block
 		unsigned int start_segno = ses->start_segno;
 		unsigned int end = min(start_segno + SIT_ENTRY_PER_BLOCK,
 						(unsigned long)MAIN_SEGS(sbi));
@@ -1991,14 +2043,22 @@ void flush_sit_entries(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 		if (to_journal) {
 			down_write(&curseg->journal_rwsem);
 		} else {
+			/*
+				f2fs有两个SIT（NAT）区域，一个是当前最新的数据，一个是当前checkpoint有效的数据，
+				get_next_sit_page把更新的数据写在了最新的那个区域，并返回这个page。
+				checkpoint完成后，最新区域成了checkpoint有效区域，而checkpoint有效区域成了更新的数据写入的区域。
+			*/
 			page = get_next_sit_page(sbi, start_segno);
 			raw_sit = page_address(page);
 		}
 
-		/* flush dirty sit entries in region of current sit set */
+		/* flush dirty sit entries in region of current sit set 
+			遍历位图，找到被置位的segno，被置位的segno对应的sit entry就是脏的，需要刷回
+		*/
 		for_each_set_bit_from(segno, bitmap, end) {
 			int offset, sit_offset;
 
+			/* segno对应的seg_entry */
 			se = get_seg_entry(sbi, segno);
 
 			/* add discard candidates */
@@ -2008,11 +2068,17 @@ void flush_sit_entries(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 			}
 
 			if (to_journal) {
+				/* 在当前活跃segment的journal中寻找相同segno号的sit entry，返回该entry的索引 */
 				offset = lookup_journal_in_cursum(journal,
 							SIT_JOURNAL, segno, 1);
 				f2fs_bug_on(sbi, offset < 0);
 				segno_in_journal(journal, offset) =
 							cpu_to_le32(segno);
+
+				/* 
+					sit_in_journal:得到offset索引对应的f2fs_sit_entry结构，该结构需要刷回
+					seg_info_to_raw_sit：将journal中的f2fs_sit_entry刷回到SSD中的SIT区域（也就是f2fs_sit_block）。
+				*/
 				seg_info_to_raw_sit(se,
 					&sit_in_journal(journal, offset));
 			} else {
@@ -2021,6 +2087,7 @@ void flush_sit_entries(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 						&raw_sit->entries[sit_offset]);
 			}
 
+			/* 清除位图的标志位 */
 			__clear_bit(segno, bitmap);
 			sit_i->dirty_sentries--;
 			ses->entry_cnt--;
@@ -2032,6 +2099,7 @@ void flush_sit_entries(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 			f2fs_put_page(page, 1);
 
 		f2fs_bug_on(sbi, ses->entry_cnt);
+		/* 释放sit_entry_set,因为sit_entry_set中的sit_entry都已经刷回了，该集合为空，必须清除 */
 		release_sit_entry_set(ses);
 	}
 
@@ -2158,17 +2226,24 @@ static int build_free_segmap(struct f2fs_sb_info *sbi)
 	return 0;
 }
 
+/* 构造一个长度为6的数组，每一个对象都是struct curseg_info 类型
+	分别指向不同类型的活跃segment
+*/
 static int build_curseg(struct f2fs_sb_info *sbi)
 {
 	struct curseg_info *array;
 	int i;
 
+	/* 用于申请一个数组的内存空间,并把申请得到的内存都初始化为0 
+	申请一个长度为6的数组，每个数组成员都是struct curseg_info 类型
+	*/
 	array = kcalloc(NR_CURSEG_TYPE, sizeof(*array), GFP_KERNEL);
 	if (!array)
 		return -ENOMEM;
-
+	
 	SM_I(sbi)->curseg_array = array;
 
+	/* 初始化struct curseg_info类型数组 */
 	for (i = 0; i < NR_CURSEG_TYPE; i++) {
 		mutex_init(&array[i].curseg_mutex);
 		array[i].sum_blk = kzalloc(PAGE_SIZE, GFP_KERNEL);

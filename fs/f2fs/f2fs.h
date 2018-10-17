@@ -257,13 +257,13 @@ static inline void make_dentry_ptr(struct inode *inode,
 {
 	d->inode = inode;
 
-	if (type == 1) {
+	if (type == 1) {  //普通的目录项
 		struct f2fs_dentry_block *t = (struct f2fs_dentry_block *)src;
 		d->max = NR_DENTRY_IN_BLOCK;
 		d->bitmap = &t->dentry_bitmap;
 		d->dentry = t->dentry;
 		d->filename = t->filename;
-	} else {
+	} else {   //内联的目录项
 		struct f2fs_inline_dentry *t = (struct f2fs_inline_dentry *)src;
 		d->max = NR_INLINE_DENTRY;
 		d->bitmap = &t->dentry_bitmap;
@@ -335,10 +335,11 @@ struct extent_tree {
 #define F2FS_MAP_FLAGS		(F2FS_MAP_NEW | F2FS_MAP_MAPPED |\
 				F2FS_MAP_UNWRITTEN)
 
+/* 逻辑块地址到物理块地址的映射 */
 struct f2fs_map_blocks {
-	block_t m_pblk;
-	block_t m_lblk;
-	unsigned int m_len;
+	block_t m_pblk;    //起始块的物理块地址
+	block_t m_lblk;    //起始块的逻辑块地址
+	unsigned int m_len;  //需要映射的总块数
 	unsigned int m_flags;
 	pgoff_t *m_next_pgofs;		/* point next possible non-hole pgofs */
 };
@@ -374,18 +375,18 @@ struct f2fs_map_blocks {
 #define DEF_DIR_LEVEL		0
 
 struct f2fs_inode_info {
-	struct inode vfs_inode;		/* serve a vfs inode */
+	struct inode vfs_inode;		/* serve a vfs inode 指向VFS的inode*/
 	unsigned long i_flags;		/* keep an inode flags for ioctl */
 	unsigned char i_advise;		/* use to give file attribute hints */
 	unsigned char i_dir_level;	/* use for dentry level for large dir */
-	unsigned int i_current_depth;	/* use only in directory structure */
+	unsigned int i_current_depth;	/* use only in directory structure 当前inode所在目录结构树中的深度*/
 	unsigned int i_pino;		/* parent inode number */
 	umode_t i_acl_mode;		/* keep file acl mode temporarily */
 
 	/* Use below internally in f2fs*/
 	unsigned long flags;		/* use to pass per-file flags */
 	struct rw_semaphore i_sem;	/* protect fi info */
-	atomic_t dirty_pages;		/* # of dirty pages */
+	atomic_t dirty_pages;		/* # of dirty pages 脏页数量*/
 	f2fs_hash_t chash;		/* hash value of given file name */
 	unsigned int clevel;		/* maximum level of given file name */
 	nid_t i_xattr_nid;		/* node id that contains xattrs */
@@ -454,8 +455,9 @@ static inline void __try_update_largest_extent(struct extent_tree *et,
 		et->largest = en->ei;
 }
 
+/* 与node相关的信息，管理所有的node，包括inode/meta node /data node */
 struct f2fs_nm_info {
-	block_t nat_blkaddr;		/* base disk address of NAT */
+	block_t nat_blkaddr;		/* base disk address of NAT 、NAT的地址*/
 	nid_t max_nid;			/* maximum possible node ids */
 	nid_t available_nids;		/* maximum available node ids */
 	nid_t next_scan_nid;		/* the next nid to be scanned */
@@ -463,15 +465,19 @@ struct f2fs_nm_info {
 	unsigned int ra_nid_pages;	/* # of nid pages to be readaheaded */
 	unsigned int dirty_nats_ratio;	/* control dirty nats ratio threshold */
 
-	/* NAT cache management */
+	/* NAT cache management 
+		内存中所有的nat entry以radix tree组织起来。
+	*/
 	struct radix_tree_root nat_root;/* root of the nat entry cache */
 	struct radix_tree_root nat_set_root;/* root of the nat set cache */
 	struct rw_semaphore nat_tree_lock;	/* protect nat_tree_lock */
 	struct list_head nat_entries;	/* cached nat entry list (clean) */
-	unsigned int nat_cnt;		/* the # of cached nat entries */
+	unsigned int nat_cnt;		/* the # of cached nat entries 、缓存的nat entry的总个数*/
 	unsigned int dirty_nat_cnt;	/* total num of nat entries in set */
 
-	/* free node ids management */
+	/* free node ids management 
+		空闲node id也使用radix tree组织。
+	*/
 	struct radix_tree_root free_nid_root;/* root of the free_nid cache */
 	struct list_head free_nid_list;	/* a list for free nids */
 	spinlock_t free_nid_list_lock;	/* protect free nid list */
@@ -484,6 +490,7 @@ struct f2fs_nm_info {
 };
 
 /*
+	data block的direct node
  * this structure is used as one of function parameters.
  * all the information are dedicated to a given direct node block determined
  * by the data offset in a file.
@@ -492,13 +499,13 @@ struct dnode_of_data {
 	struct inode *inode;		/* vfs inode pointer */
 	struct page *inode_page;	/* its inode page, NULL is possible */
 	struct page *node_page;		/* cached direct node page */
-	nid_t nid;			/* node id of the direct node block */
-	unsigned int ofs_in_node;	/* data offset in the node page */
+	nid_t nid;			/* node id of the direct node block 、dnode的node ID*/
+	unsigned int ofs_in_node;	/* data offset in the node page 、偏移量*/
 	bool inode_page_locked;		/* inode page is locked or not */
 	bool node_changed;		/* is node block changed */
 	char cur_level;			/* level of hole node page */
 	char max_level;			/* level of current page located */
-	block_t	data_blkaddr;		/* block address of the node block */
+	block_t	data_blkaddr;		/* block address of the node block 、data block所在的块地址*/
 };
 
 static inline void set_new_dnode(struct dnode_of_data *dn, struct inode *inode,
@@ -529,12 +536,12 @@ static inline void set_new_dnode(struct dnode_of_data *dn, struct inode *inode,
 #define NR_CURSEG_TYPE	(NR_CURSEG_DATA_TYPE + NR_CURSEG_NODE_TYPE)
 
 enum {
-	CURSEG_HOT_DATA	= 0,	/* directory entry blocks */
-	CURSEG_WARM_DATA,	/* data blocks */
+	CURSEG_HOT_DATA	= 0,	/* directory entry blocks 目录项对应的块*/
+	CURSEG_WARM_DATA,	/* data blocks 数据块*/
 	CURSEG_COLD_DATA,	/* multimedia or GCed data blocks */
-	CURSEG_HOT_NODE,	/* direct node blocks of directory files */
-	CURSEG_WARM_NODE,	/* direct node blocks of normal files */
-	CURSEG_COLD_NODE,	/* indirect node blocks */
+	CURSEG_HOT_NODE,	/* direct node blocks of directory files 目录文件的dnode*/
+	CURSEG_WARM_NODE,	/* direct node blocks of normal files 普通文件的dnode*/
+	CURSEG_COLD_NODE,	/* indirect node blocks 间接node块*/
 	NO_CHECK_TYPE,
 	CURSEG_DIRECT_IO,	/* to use for the direct IO path */
 };
@@ -552,22 +559,28 @@ struct flush_cmd_control {
 	struct llist_node *dispatch_list;	/* list for command dispatch */
 };
 
+/* 管理所有segment信息
+	例如：空闲segment位图
+		  脏segment组成链表
+*/
 struct f2fs_sm_info {
-	struct sit_info *sit_info;		/* whole segment information */
-	struct free_segmap_info *free_info;	/* free segment information */
+	struct sit_info *sit_info;		/* whole segment information 全部segment的信息*/
+	struct free_segmap_info *free_info;	/* free segment information 空闲segment信息（维护着segment位图）*/
 	struct dirty_seglist_info *dirty_info;	/* dirty segment information */
 	struct curseg_info *curseg_array;	/* active segment information */
 
-	block_t seg0_blkaddr;		/* block address of 0'th segment */
-	block_t main_blkaddr;		/* start block address of main area */
-	block_t ssa_blkaddr;		/* start block address of SSA area */
+	block_t seg0_blkaddr;		/* block address of 0'th segment ，第0个segment的起始块地址*/
+	block_t main_blkaddr;		/* start block address of main area，main区域的起始块地址 */
+	block_t ssa_blkaddr;		/* start block address of SSA area ，SSA区域的起始块地址*/
 
 	unsigned int segment_count;	/* total # of segments */
 	unsigned int main_segments;	/* # of segments in main area */
 	unsigned int reserved_segments;	/* # of reserved segments */
 	unsigned int ovp_segments;	/* # of overprovision segments */
 
-	/* a threshold to reclaim prefree segments */
+	/* a threshold to reclaim prefree segments 
+		回收脏segment的阈值
+	*/
 	unsigned int rec_prefree_segments;
 
 	/* for small discard management */
@@ -578,10 +591,10 @@ struct f2fs_sm_info {
 	/* for batched trimming */
 	unsigned int trim_sections;		/* # of sections to trim */
 
-	struct list_head sit_entry_set;	/* sit entry set list */
+	struct list_head sit_entry_set;	/* sit entry set list 、sit entry set链表的头结点*/
 
-	unsigned int ipu_policy;	/* in-place-update policy */
-	unsigned int min_ipu_util;	/* in-place-update threshold */
+	unsigned int ipu_policy;	/* in-place-update policy 就地更新策略*/
+	unsigned int min_ipu_util;	/* in-place-update threshold 就地更新的阈值*/
 	unsigned int min_fsync_blocks;	/* threshold for fsync */
 
 	/* for flush command control */
@@ -633,13 +646,14 @@ enum page_type {
 	OPU,
 };
 
+/* 进行bio请求所需的io信息，一般用来初始化bio结构 */
 struct f2fs_io_info {
 	struct f2fs_sb_info *sbi;	/* f2fs_sb_info pointer */
 	enum page_type type;	/* contains DATA/NODE/META/META_FLUSH */
 	int rw;			/* contains R/RS/W/WS with REQ_META/REQ_PRIO */
 	block_t new_blkaddr;	/* new block address to be written */
 	block_t old_blkaddr;	/* old block address before Cow */
-	struct page *page;	/* page to be written */
+	struct page *page;	/* page to be written ，进行bio读操作时，从磁盘读取的数据放在这个page中*/
 	struct page *encrypted_page;	/* encrypted page */
 };
 
@@ -684,30 +698,41 @@ enum {
 #define F2FS_KEY_DESC_PREFIX "f2fs:"
 #define F2FS_KEY_DESC_PREFIX_SIZE 5
 #endif
+
+/* 沟通VFS的super_block和F2FS的f2fs_super_block的桥梁 */
 struct f2fs_sb_info {
-	struct super_block *sb;			/* pointer to VFS super block */
+	struct super_block *sb;			/* pointer to VFS super block 指向VFS的超级块*/
 	struct proc_dir_entry *s_proc;		/* proc entry */
-	struct f2fs_super_block *raw_super;	/* raw super block pointer */
-	int valid_super_block;			/* valid super block no */
+	struct f2fs_super_block *raw_super;	/* raw super block pointer 指向F2FS的裸超级块*/
+	int valid_super_block;			/* valid super block no 有效的超级块的块号（0或1），因为有两个超级块，只有一个是最新有效的*/
 	int s_flag;				/* flags for sbi */
 
 #ifdef CONFIG_F2FS_FS_ENCRYPTION
 	u8 key_prefix[F2FS_KEY_DESC_PREFIX_SIZE];
 	u8 key_prefix_size;
 #endif
-	/* for node-related operations */
+	/* for node-related operations 
+		与node相关的操作，管理所有的node节点；
+		所有的node当做同一个文件管理，对应着同一个node_inode(与meta_inode相同)
+	*/
 	struct f2fs_nm_info *nm_info;		/* node manager */
-	struct inode *node_inode;		/* cache node blocks */
+	struct inode *node_inode;		/* cache node blocks ,缓存node对应的所有block*/
 
-	/* for segment-related operations */
-	struct f2fs_sm_info *sm_info;		/* segment manager */
+	/* for segment-related operations 
+		与segment相关的操作
+	*/
+	struct f2fs_sm_info *sm_info;		/* segment manager 管理着所有的segment、包括空闲和脏segment */
 
-	/* for bio operations */
+	/* for bio operations 
+		bio操作：读、写
+	*/
 	struct f2fs_bio_info read_io;			/* for read bios */
 	struct f2fs_bio_info write_io[NR_PAGE_TYPE];	/* for write bios */
 
 	/* for checkpoint */
-	struct f2fs_checkpoint *ckpt;		/* raw checkpoint pointer */
+	struct f2fs_checkpoint *ckpt;		/* raw checkpoint pointer 指向CP区域*/
+
+	/* f2fs将磁盘上的所有元数据区域当做同一个文件来处理，该文件对应着meta_inode，对应着相同的address_space */
 	struct inode *meta_inode;		/* cache meta blocks */
 	struct mutex cp_mutex;			/* checkpoint procedure lock */
 	struct rw_semaphore cp_rwsem;		/* blocking FS operations */
@@ -740,9 +765,9 @@ struct f2fs_sb_info {
 	unsigned int log_sectors_per_block;	/* log2 sectors per block */
 	unsigned int log_blocksize;		/* log2 block size */
 	unsigned int blocksize;			/* block size */
-	unsigned int root_ino_num;		/* root inode number*/
-	unsigned int node_ino_num;		/* node inode number*/
-	unsigned int meta_ino_num;		/* meta inode number*/
+	unsigned int root_ino_num;		/* root inode number 根目录节点号=0*/
+	unsigned int node_ino_num;		/* node inode number =1*/
+	unsigned int meta_ino_num;		/* meta inode number =2 元数据的节点号（将所有元数据区域看做同一个文件，对应着同一个inode）*/
 	unsigned int log_blocks_per_seg;	/* log2 blocks per segment */
 	unsigned int blocks_per_seg;		/* blocks per segment */
 	unsigned int segs_per_sec;		/* segments per section */
@@ -779,7 +804,7 @@ struct f2fs_sb_info {
 	 */
 #ifdef CONFIG_F2FS_STAT_FS
 	struct f2fs_stat_info *stat_info;	/* FS status information */
-	unsigned int segment_count[2];		/* # of allocated segments */
+	unsigned int segment_count[2];		/* # of allocated segments ，以LFS或SSR方式申请的segment各有多少个*/
 	unsigned int block_count[2];		/* # of allocated blocks */
 	atomic_t inplace_count;		/* # of inplace update */
 	atomic64_t total_hit_ext;		/* # of lookup extent cache */

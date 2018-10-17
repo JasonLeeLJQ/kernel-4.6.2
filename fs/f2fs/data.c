@@ -91,7 +91,7 @@ static struct bio *__bio_alloc(struct f2fs_sb_info *sbi, block_t blk_addr,
 	bio = f2fs_bio_alloc(npages);
 
 	bio->bi_bdev = sbi->sb->s_bdev;
-	bio->bi_iter.bi_sector = SECTOR_FROM_BLOCK(blk_addr);
+	bio->bi_iter.bi_sector = SECTOR_FROM_BLOCK(blk_addr);  //将block地址转换成扇区sector地址
 	bio->bi_end_io = is_read ? f2fs_read_end_io : f2fs_write_end_io;
 	bio->bi_private = is_read ? NULL : sbi;
 
@@ -220,14 +220,17 @@ int f2fs_submit_page_bio(struct f2fs_io_info *fio)
 	trace_f2fs_submit_page_bio(page, fio);
 	f2fs_trace_ios(fio, 0);
 
-	/* Allocate a new bio */
+	/* Allocate a new bio
+	*/
 	bio = __bio_alloc(fio->sbi, fio->new_blkaddr, 1, is_read_io(fio->rw));
 
+	/* 进行bio合并 */
 	if (bio_add_page(bio, page, PAGE_SIZE, 0) < PAGE_SIZE) {
 		bio_put(bio);
 		return -EFAULT;
 	}
 
+	/* 提交bio请求 */
 	submit_bio(fio->rw, bio);
 	return 0;
 }
@@ -895,8 +898,15 @@ out:
 }
 
 /*
+	从磁盘读取若干个block到内存页
+	当读取单个页时：参数pages=NULL；参数page不为NULL；
+	当读取多个页时：参数pages是一个链表，组织着所有的内存页，读取到的数据放到这些页中；参数page=NULL;
  * This function was originally taken from fs/mpage.c, and customized for f2fs.
  * Major change was from block_size == page_size in f2fs by default.
+
+	首先判断这些内存页page的物理块地址是否相邻，如果相邻，可以合并成一个bio请求；
+	否则分别提交bio请求
+ 
  */
 static int f2fs_mpage_readpages(struct address_space *mapping,
 			struct list_head *pages, struct page *page,
@@ -912,7 +922,7 @@ static int f2fs_mpage_readpages(struct address_space *mapping,
 	sector_t last_block;
 	sector_t last_block_in_file;
 	sector_t block_nr;
-	struct block_device *bdev = inode->i_sb->s_bdev;
+	struct block_device *bdev = inode->i_sb->s_bdev;  //获取inode对应的块设备
 	struct f2fs_map_blocks map;
 
 	map.m_pblk = 0;
@@ -921,19 +931,21 @@ static int f2fs_mpage_readpages(struct address_space *mapping,
 	map.m_flags = 0;
 	map.m_next_pgofs = NULL;
 
+	/* 遍历每个page，依次执行bio操作 */
 	for (page_idx = 0; nr_pages; page_idx++, nr_pages--) {
 
 		prefetchw(&page->flags);
 		if (pages) {
 			page = list_entry(pages->prev, struct page, lru);
 			list_del(&page->lru);
+			/* 将page插入到页缓存，成功返回0 */
 			if (add_to_page_cache_lru(page, mapping,
 						  page->index, GFP_KERNEL))
 				goto next_page;
 		}
 
-		block_in_file = (sector_t)page->index;
-		last_block = block_in_file + nr_pages;
+		block_in_file = (sector_t)page->index;  //page在文件内的索引位置
+		last_block = block_in_file + nr_pages;  //请求的最后一个page在文件内的索引位置
 		last_block_in_file = (i_size_read(inode) + blocksize - 1) >>
 								blkbits;
 		if (last_block > last_block_in_file)
@@ -983,6 +995,7 @@ got_it:
 		 */
 		if (bio && (last_block_in_bio != block_nr - 1)) {
 submit_and_realloc:
+			/* 提交bio请求，并将bio置位NULL，方便下次bio请求 */
 			submit_bio(READ, bio);
 			bio = NULL;
 		}
@@ -1001,6 +1014,7 @@ submit_and_realloc:
 						F2FS_I_SB(inode), block_nr);
 			}
 
+			/* 申请新的bio */
 			bio = bio_alloc(GFP_KERNEL,
 				min_t(int, nr_pages, BIO_MAX_PAGES));
 			if (!bio) {
@@ -1008,12 +1022,15 @@ submit_and_realloc:
 					fscrypt_release_ctx(ctx);
 				goto set_error_page;
 			}
+			/* 设置bio参数 */
 			bio->bi_bdev = bdev;
 			bio->bi_iter.bi_sector = SECTOR_FROM_BLOCK(block_nr);
 			bio->bi_end_io = f2fs_read_end_io;
 			bio->bi_private = ctx;
 		}
 
+		/* 如物理块连续，bio_add_page试图将page加入bio，合并成一个bio请求；
+			不能合并，则返回值为非空，将上一次bio请求提交，重新分配bio； */
 		if (bio_add_page(bio, page, blocksize, 0) < blocksize)
 			goto submit_and_realloc;
 
@@ -1040,6 +1057,7 @@ next_page:
 	return 0;
 }
 
+/* f2fs的readpage方法 */
 static int f2fs_read_data_page(struct file *file, struct page *page)
 {
 	struct inode *inode = page->mapping->host;
@@ -1055,6 +1073,7 @@ static int f2fs_read_data_page(struct file *file, struct page *page)
 	return ret;
 }
 
+/* f2fs的readpages方法，把一个个页从磁盘读到内存中 */
 static int f2fs_read_data_pages(struct file *file,
 			struct address_space *mapping,
 			struct list_head *pages, unsigned nr_pages)
@@ -1079,6 +1098,7 @@ int do_write_data_page(struct f2fs_io_info *fio)
 	int err = 0;
 
 	set_new_dnode(&dn, inode, NULL, NULL, 0);
+	/* 获得page所在的block对应的dnode */
 	err = get_dnode_of_data(&dn, page->index, LOOKUP_NODE);
 	if (err)
 		return err;
@@ -1091,6 +1111,7 @@ int do_write_data_page(struct f2fs_io_info *fio)
 		goto out_writepage;
 	}
 
+	/* 文件是加密的普通文件，一般不会执行 */
 	if (f2fs_encrypted_inode(inode) && S_ISREG(inode->i_mode)) {
 		gfp_t gfp_flags = GFP_NOFS;
 
@@ -1117,6 +1138,7 @@ retry_encrypt:
 	set_page_writeback(page);
 
 	/*
+		如果是SSR模式，更新数据需要就地更新，而不是LFS的异地更新。
 	 * If current allocation needs SSR,
 	 * it had better in-place writes for updated data.
 	 */
@@ -1128,6 +1150,7 @@ retry_encrypt:
 		set_inode_flag(F2FS_I(inode), FI_UPDATE_WRITE);
 		trace_f2fs_do_write_data_page(page, IPU);
 	} else {
+		/* 写入page */
 		write_data_page(&dn, fio);
 		trace_f2fs_do_write_data_page(page, OPU);
 		set_inode_flag(F2FS_I(inode), FI_APPEND_WRITE);
@@ -1139,6 +1162,7 @@ out_writepage:
 	return err;
 }
 
+/* f2fs写data page方法 */
 static int f2fs_write_data_page(struct page *page,
 					struct writeback_control *wbc)
 {
@@ -1181,7 +1205,9 @@ write:
 			available_free_memory(sbi, BASE_CHECK))
 		goto redirty_out;
 
-	/* Dentry blocks are controlled by checkpoint */
+	/* Dentry blocks are controlled by checkpoint 
+		目录文件
+	*/
 	if (S_ISDIR(inode->i_mode)) {
 		if (unlikely(f2fs_cp_error(sbi)))
 			goto redirty_out;
@@ -1239,12 +1265,18 @@ static int __f2fs_writepage(struct page *page, struct writeback_control *wbc,
 			void *data)
 {
 	struct address_space *mapping = data;
+
+	/* 
+		writepage方法：f2fs_write_data_page
+		实际上就是f2fs提供的写入单个page的方法
+	*/
 	int ret = mapping->a_ops->writepage(page, wbc);
 	mapping_set_error(mapping, ret);
 	return ret;
 }
 
 /*
+	此函数最关键的部分是：对于COLD data page不做写回操作；优先写入HOT和WARM data page
  * This function was copied from write_cche_pages from mm/page-writeback.c.
  * The major change is making write step of cold data page separately from
  * warm/hot data page.
@@ -1255,7 +1287,7 @@ static int f2fs_write_cache_pages(struct address_space *mapping,
 {
 	int ret = 0;
 	int done = 0;
-	struct pagevec pvec;
+	struct pagevec pvec;  //page容器，容纳14个page
 	int nr_pages;
 	pgoff_t uninitialized_var(writeback_index);
 	pgoff_t index;
@@ -1284,7 +1316,7 @@ next:
 		cycled = 1; /* ignore range_cyclic tests */
 	}
 	if (wbc->sync_mode == WB_SYNC_ALL || wbc->tagged_writepages)
-		tag = PAGECACHE_TAG_TOWRITE;
+		tag = PAGECACHE_TAG_TOWRITE;  //页缓存中radix tree的标签
 	else
 		tag = PAGECACHE_TAG_DIRTY;
 retry:
@@ -1294,11 +1326,13 @@ retry:
 	while (!done && (index <= end)) {
 		int i;
 
+		/* 在页缓存中查找特定tag的页面，将页面放在pvec容器里，返回找到页面的个数 */
 		nr_pages = pagevec_lookup_tag(&pvec, mapping, &index, tag,
 			      min(end - index, (pgoff_t)PAGEVEC_SIZE - 1) + 1);
 		if (nr_pages == 0)
 			break;
 
+		/* 遍历pagevec的每一个page，对每个page分别执行writepage写回磁盘操作 */
 		for (i = 0; i < nr_pages; i++) {
 			struct page *page = pvec.pages[i];
 
@@ -1322,6 +1356,7 @@ continue_unlock:
 				goto continue_unlock;
 			}
 
+			/* 如果该page是COLD，先不着急写回磁盘；HOT和WARM page优先 */
 			if (step == is_cold_data(page))
 				goto continue_unlock;
 
@@ -1337,6 +1372,11 @@ continue_unlock:
 			if (!clear_page_dirty_for_io(page))
 				goto continue_unlock;
 
+			/* 
+				真正执行writepage；这里一次只写入一个page
+				writepages方法由参数__f2fs_writepage传入，
+				其实就是f2fs提供的wirtepage方法，与f2fs写入单个page是相同的
+			*/
 			ret = (*writepage)(page, wbc, data);
 			if (unlikely(ret)) {
 				if (ret == AOP_WRITEPAGE_ACTIVATE) {
@@ -1376,6 +1416,7 @@ continue_unlock:
 	return ret;
 }
 
+/* f2fs一次写入多个page；与一次写入一个page有些区别 */
 static int f2fs_write_data_pages(struct address_space *mapping,
 			    struct writeback_control *wbc)
 {
@@ -1408,12 +1449,14 @@ static int f2fs_write_data_pages(struct address_space *mapping,
 
 	trace_f2fs_writepages(mapping->host, wbc, DATA);
 
+	/* 将wbc->nr_to_write大小与segment大小对齐 */
 	diff = nr_pages_to_write(sbi, DATA, wbc);
 
 	if (!S_ISDIR(inode->i_mode) && wbc->sync_mode == WB_SYNC_ALL) {
 		mutex_lock(&sbi->writepages);
 		locked = true;
 	}
+	/* 一次写入多个pages，writepages方法由参数__f2fs_writepage传入 */
 	ret = f2fs_write_cache_pages(mapping, wbc, __f2fs_writepage, mapping);
 	f2fs_submit_merged_bio_cond(sbi, inode, NULL, 0, DATA, WRITE);
 	if (locked)
@@ -1542,6 +1585,12 @@ static int f2fs_write_begin(struct file *file, struct address_space *mapping,
 			goto fail;
 	}
 repeat:
+	/* 调用grab_cache_page_write_begin（）在pagecache中查找页面。
+	如果找到了该页，则增加计数并设置PG_locked标志。
+	如果该页不在页面Cache中，则分配一个新页，并调用add_to_page_cache_lru（），
+	将该页插入页面Cache中，这个函数也会增加页面引用计数，并设置PG_locked标志。
+	若grab_cache_page_write_begin（）没能成功返回页面，说明系统没有空闲内存了，
+	就没法继续写数据到硬盘，失败返回 */
 	page = grab_cache_page_write_begin(mapping, index, flags);
 	if (!page) {
 		err = -ENOMEM;
@@ -1640,10 +1689,12 @@ static int f2fs_write_end(struct file *file,
 
 	trace_f2fs_write_end(inode, pos, len, copied);
 
+	/* 因为文件inode的大小改变了，所以设置页面为脏 */
 	set_page_dirty(page);
 
 	if (pos + copied > i_size_read(inode)) {
 		i_size_write(inode, pos + copied);
+		/* 同时将inode标记为脏 */
 		mark_inode_dirty(inode);
 	}
 

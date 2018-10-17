@@ -362,6 +362,7 @@ out_free_cache:
 }
 
 /*
+	为一个特定的struct结构创建一个slab缓存区
  * kmem_cache_create - Create a cache.
  * @name: A string which is used in /proc/slabinfo to identify this cache.
  * @size: The size of objects to be created in this cache.

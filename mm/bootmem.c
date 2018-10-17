@@ -169,6 +169,7 @@ void __init free_bootmem_late(unsigned long physaddr, unsigned long size)
 	}
 }
 
+//将bootmem管理（位图）的所有页框释放到伙伴系统的freelists中
 static unsigned long __init free_all_bootmem_core(bootmem_data_t *bdata)
 {
 	struct page *page;
@@ -177,9 +178,9 @@ static unsigned long __init free_all_bootmem_core(bootmem_data_t *bdata)
 	if (!bdata->node_bootmem_map)
 		return 0;
 
-	map = bdata->node_bootmem_map;
-	start = bdata->node_min_pfn;
-	end = bdata->node_low_pfn;
+	map = bdata->node_bootmem_map; //位图
+	start = bdata->node_min_pfn;   //该node的开始页框
+	end = bdata->node_low_pfn;     //该node的结束页框
 
 	bdebug("nid=%td start=%lx end=%lx\n",
 		bdata - bootmem_node_data, start, end);
@@ -267,6 +268,8 @@ void __init reset_all_zones_managed_pages(void)
 }
 
 /**
+ 将bootmem管理的所有页框释放到伙伴系统的freelists中
+
  * free_all_bootmem - release free pages to the buddy allocator
  *
  * Returns the number of pages actually released.
@@ -279,6 +282,7 @@ unsigned long __init free_all_bootmem(void)
 	reset_all_zones_managed_pages();
 
 	list_for_each_entry(bdata, &bdata_list, list)
+		//释放页框到伙伴系统（通过位图）
 		total_pages += free_all_bootmem_core(bdata);
 
 	totalram_pages += total_pages;

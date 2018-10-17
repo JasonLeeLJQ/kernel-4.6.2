@@ -443,17 +443,22 @@ static int parse_options(struct super_block *sb, char *options)
 	return 0;
 }
 
+/* f2fs特定的alloc_inode方法 */
 static struct inode *f2fs_alloc_inode(struct super_block *sb)
 {
 	struct f2fs_inode_info *fi;
 
+	/* slab分配器分配一个f2fs_inode_info对象 */
 	fi = kmem_cache_alloc(f2fs_inode_cachep, GFP_F2FS_ZERO);
 	if (!fi)
 		return NULL;
 
+	/* 初始化fi->vfs_inode的部分字段（），即初始化VFS的inode结构 */
 	init_once((void *) fi);
 
-	/* Initialize f2fs-specific inode info */
+	/* Initialize f2fs-specific inode info 
+	初始化f2fs_inode_info字段
+	*/
 	fi->vfs_inode.i_version = 1;
 	atomic_set(&fi->dirty_pages, 0);
 	fi->i_current_depth = 1;
@@ -758,6 +763,7 @@ static const struct file_operations f2fs_seq_segment_info_fops = {
 	.release = single_release,
 };
 
+/* 对f2fs_sb_info进行默认设置 */
 static void default_options(struct f2fs_sb_info *sbi)
 {
 	/* init some FS parameters */
@@ -972,23 +978,25 @@ static const struct export_operations f2fs_export_ops = {
 	.get_parent = f2fs_get_parent,
 };
 
+/* 得到单个文件可容纳最大的block数 */
 static loff_t max_file_blocks(void)
 {
-	loff_t result = (DEF_ADDRS_PER_INODE - F2FS_INLINE_XATTR_ADDRS);
-	loff_t leaf_count = ADDRS_PER_BLOCK;
+	loff_t result = (DEF_ADDRS_PER_INODE - F2FS_INLINE_XATTR_ADDRS);  //923-50 = 873
+	loff_t leaf_count = ADDRS_PER_BLOCK; //（一级索引块）1018个直接指向block的指针
 
-	/* two direct node blocks */
+	/* two direct node blocks 两个一级索引块(直接 node )指针*/
 	result += (leaf_count * 2);
 
-	/* two indirect node blocks */
+	/* two indirect node blocks  两个二级索引块(间接 node )指针*/
 	leaf_count *= NIDS_PER_BLOCK;
 	result += (leaf_count * 2);
 
-	/* one double indirect node block */
+	/* one double indirect node block 一个三级索引块(二级间接 node)指针*/
 	leaf_count *= NIDS_PER_BLOCK;
 	result += leaf_count;
 
-	return result;
+	/* 总大小 = 4 KB * (929 + 2*1018 + 2*1018*1018 + 1018*1018*1018) == 3.94 TB */
+	return result;  //result = 1057053445
 }
 
 static int __f2fs_commit_super(struct buffer_head *bh,
@@ -1005,6 +1013,7 @@ static int __f2fs_commit_super(struct buffer_head *bh,
 	return __sync_dirty_buffer(bh, WRITE_FLUSH_FUA);
 }
 
+/* 检查各个区域的边界 */
 static inline bool sanity_check_area_boundary(struct super_block *sb,
 					struct buffer_head *bh)
 {
@@ -1105,6 +1114,7 @@ static inline bool sanity_check_area_boundary(struct super_block *sb,
 	return false;
 }
 
+/* 对从磁盘读取的裸超级块进行合理检查 */
 static int sanity_check_raw_super(struct super_block *sb,
 				struct buffer_head *bh)
 {
@@ -1175,13 +1185,16 @@ static int sanity_check_raw_super(struct super_block *sb,
 		return 1;
 	}
 
-	/* check CP/SIT/NAT/SSA/MAIN_AREA area boundary */
+	/* check CP/SIT/NAT/SSA/MAIN_AREA area boundary 
+	检查CP/SIT/NAT/SSA/MAIN_AREA区域边界
+	*/
 	if (sanity_check_area_boundary(sb, bh))
 		return 1;
 
 	return 0;
 }
 
+/* 对checkpoint区域进行合理检查 */
 int sanity_check_ckpt(struct f2fs_sb_info *sbi)
 {
 	unsigned int total, fsmeta;
@@ -1205,6 +1218,7 @@ int sanity_check_ckpt(struct f2fs_sb_info *sbi)
 	return 0;
 }
 
+/* 初始化f2fs_sb_info的部分字段 */
 static void init_sb_info(struct f2fs_sb_info *sbi)
 {
 	struct f2fs_super_block *raw_super = sbi->raw_super;
@@ -1247,6 +1261,8 @@ static void init_sb_info(struct f2fs_sb_info *sbi)
 }
 
 /*
+	读取f2f2磁盘上的超级块
+	因为f2fs有两份超级块，要读两次，选择最新有效的超级块。
  * Read f2fs raw super block.
  * Because we have two copies of super block, so read both of them
  * to get the first valid one. If any one of them is broken, we pass
@@ -1261,11 +1277,14 @@ static int read_raw_super_block(struct super_block *sb,
 	struct f2fs_super_block *super;
 	int err = 0;
 
+	/* 创建一个f2fs_super_block对象 */
 	super = kzalloc(sizeof(struct f2fs_super_block), GFP_KERNEL);
 	if (!super)
 		return -ENOMEM;
 
+	/* 读两个超级块 */
 	for (block = 0; block < 2; block++) {
+		/* 读取超级块所在的数据块，磁盘中的一个block读到内存中对应着一个buffer_head */
 		bh = sb_bread(sb, block);
 		if (!bh) {
 			f2fs_msg(sb, KERN_ERR, "Unable to read %dth superblock",
@@ -1274,7 +1293,7 @@ static int read_raw_super_block(struct super_block *sb,
 			continue;
 		}
 
-		/* sanity checking of raw super */
+		/* sanity checking of raw super ，对裸超级块进行合理检查*/
 		if (sanity_check_raw_super(sb, bh)) {
 			f2fs_msg(sb, KERN_ERR,
 				"Can't find valid F2FS filesystem in %dth superblock",
@@ -1284,6 +1303,7 @@ static int read_raw_super_block(struct super_block *sb,
 			continue;
 		}
 
+		/* 若传进来的raw_super参数是NULL，则新创建的f2fs_super_block对象赋给raw_super */
 		if (!*raw_super) {
 			memcpy(super, bh->b_data + F2FS_SUPER_OFFSET,
 							sizeof(*super));
@@ -1331,6 +1351,9 @@ int f2fs_commit_super(struct f2fs_sb_info *sbi, bool recover)
 	return err;
 }
 
+/* 从磁盘上读取superblock元数据信息，填充内存中的superblock对象。
+	该函数在mount过程中调用
+*/
 static int f2fs_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct f2fs_sb_info *sbi;
@@ -1348,7 +1371,9 @@ try_onemore:
 	valid_super_block = -1;
 	recovery = 0;
 
-	/* allocate memory for f2fs-specific super block info */
+	/* allocate memory for f2fs-specific super block info
+	 申请特定F2FS的超级块对象（f2fs_sb_info）
+	*/
 	sbi = kzalloc(sizeof(struct f2fs_sb_info), GFP_KERNEL);
 	if (!sbi)
 		return -ENOMEM;
@@ -1368,12 +1393,17 @@ try_onemore:
 		goto free_sbi;
 	}
 
+	/* 从磁盘上读取f2fs超级块f2fs_super_block，
+	   得到的f2fs_super_block赋给raw_super，
+	   有效的超级块号赋给了valid_super_block 
+	*/
 	err = read_raw_super_block(sb, &raw_super, &valid_super_block,
 								&recovery);
 	if (err)
 		goto free_sbi;
 
 	sb->s_fs_info = sbi;
+	/* 对f2fs_sb_info进行默认设置 */
 	default_options(sbi);
 	/* parse mount options */
 	options = kstrdup((const char *)data, GFP_KERNEL);
@@ -1386,9 +1416,10 @@ try_onemore:
 	if (err)
 		goto free_options;
 
-	sbi->max_file_blocks = max_file_blocks();
+	/* 以下对super_block和f2fs_sb_info对象进行设置 */
+	sbi->max_file_blocks = max_file_blocks();  //获得单个文件最大支持的block数目
 	sb->s_maxbytes = sbi->max_file_blocks <<
-				le32_to_cpu(raw_super->log_blocksize);
+				le32_to_cpu(raw_super->log_blocksize);  //单个文件最大的尺寸
 	sb->s_max_links = F2FS_LINK_MAX;
 	get_random_bytes(&sbi->s_next_generation, sizeof(u32));
 
@@ -1402,7 +1433,9 @@ try_onemore:
 		(test_opt(sbi, POSIX_ACL) ? MS_POSIXACL : 0);
 	memcpy(sb->s_uuid, raw_super->uuid, sizeof(raw_super->uuid));
 
-	/* init f2fs-specific super block info */
+	/* init f2fs-specific super block info 
+		初始化f2fs_sb_info对象
+	*/
 	sbi->sb = sb;
 	sbi->raw_super = raw_super;
 	sbi->valid_super_block = valid_super_block;
@@ -1415,6 +1448,7 @@ try_onemore:
 	set_sbi_flag(sbi, SBI_POR_DOING);
 	spin_lock_init(&sbi->stat_lock);
 
+	/* 初始化sbi->read_io 和sbi->write_io */
 	init_rwsem(&sbi->read_io.io_rwsem);
 	sbi->read_io.sbi = sbi;
 	sbi->read_io.bio = NULL;
@@ -1428,7 +1462,9 @@ try_onemore:
 	init_waitqueue_head(&sbi->cp_wait);
 	init_sb_info(sbi);
 
-	/* get an inode for meta space */
+	/* get an inode for meta space 
+	将f2fs的所有元数据区域视为一个文件，为这个文件创建inode
+	*/
 	sbi->meta_inode = f2fs_iget(sb, F2FS_META_INO(sbi));
 	if (IS_ERR(sbi->meta_inode)) {
 		f2fs_msg(sb, KERN_ERR, "Failed to read F2FS meta data inode");
@@ -1436,6 +1472,7 @@ try_onemore:
 		goto free_options;
 	}
 
+	/* 获得一个有效的CP区域 */
 	err = get_valid_checkpoint(sbi);
 	if (err) {
 		f2fs_msg(sb, KERN_ERR, "Failed to get valid F2FS checkpoint");
@@ -1633,6 +1670,7 @@ free_sbi:
 	return err;
 }
 
+/* f2fs mount文件系统 */
 static struct dentry *f2fs_mount(struct file_system_type *fs_type, int flags,
 			const char *dev_name, void *data)
 {
@@ -1646,6 +1684,7 @@ static void kill_f2fs_super(struct super_block *sb)
 	kill_block_super(sb);
 }
 
+/* 表示文件系统装载和卸载信息 */
 static struct file_system_type f2fs_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "f2fs",

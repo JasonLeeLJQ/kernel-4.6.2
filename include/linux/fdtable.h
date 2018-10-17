@@ -75,6 +75,7 @@ struct dentry;
 	rcu_dereference_check_fdtable((files), (files)->fdt)
 
 /*
+	查找files->fdt->fd[]数组，找到对应的file结构
  * The caller must ensure that fd table isn't shared or hold rcu or file lock
  */
 static inline struct file *__fcheck_files(struct files_struct *files, unsigned int fd)

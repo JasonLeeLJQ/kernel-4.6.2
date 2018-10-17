@@ -974,6 +974,7 @@ struct dentry *mount_bdev(struct file_system_type *fs_type,
 	if (!(flags & MS_RDONLY))
 		mode |= FMODE_WRITE;
 
+	 /* 通过设备名字获取被mount设备的bdev对象(块设备) */ 
 	bdev = blkdev_get_by_path(dev_name, mode, fs_type);
 	if (IS_ERR(bdev))
 		return ERR_CAST(bdev);
@@ -989,6 +990,7 @@ struct dentry *mount_bdev(struct file_system_type *fs_type,
 		error = -EBUSY;
 		goto error_bdev;
 	}
+	/* 查找或者创建superblock对象 */
 	s = sget(fs_type, test_bdev_super, set_bdev_super, flags | MS_NOSEC,
 		 bdev);
 	mutex_unlock(&bdev->bd_fsfreeze_mutex);
@@ -1013,9 +1015,11 @@ struct dentry *mount_bdev(struct file_system_type *fs_type,
 		blkdev_put(bdev, mode);
 		down_write(&s->s_umount);
 	} else {
+		/* 文件系统根目录项不存在，通过filler_super函数读取磁盘上的superblock元数据信息，并且初始化superblock内存结构 */ 
 		s->s_mode = mode;
 		snprintf(s->s_id, sizeof(s->s_id), "%pg", bdev);
-		sb_set_blocksize(s, block_size(bdev));
+		sb_set_blocksize(s, block_size(bdev));  //设置superblock块大小
+		/* 调用传进来的fill_super方法，读取磁盘上的superblock元数据信息 */
 		error = fill_super(s, data, flags & MS_SILENT ? 1 : 0);
 		if (error) {
 			deactivate_locked_super(s);
@@ -1119,6 +1123,7 @@ mount_fs(struct file_system_type *type, int flags, const char *name, void *data)
 			goto out_free_secdata;
 	}
 
+	/* 调用具体文件系统的mount方法 */
 	root = type->mount(type, flags, name, data);
 	if (IS_ERR(root)) {
 		error = PTR_ERR(root);

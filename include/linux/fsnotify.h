@@ -180,6 +180,7 @@ static inline void fsnotify_mkdir(struct inode *inode, struct dentry *dentry)
 }
 
 /*
+	通知文件已经被读取
  * fsnotify_access - file was read
  */
 static inline void fsnotify_access(struct file *file)

@@ -800,6 +800,7 @@ int bio_add_pc_page(struct request_queue *q, struct bio *bio, struct page
 EXPORT_SYMBOL(bio_add_pc_page);
 
 /**
+	如果物理块连续，bio_add_page试图将page加入bio，合并成一个bio请求；
  *	bio_add_page	-	attempt to add page to bio
  *	@bio: destination bio
  *	@page: page to add
@@ -828,6 +829,7 @@ int bio_add_page(struct bio *bio, struct page *page,
 	if (bio->bi_vcnt > 0) {
 		bv = &bio->bi_io_vec[bio->bi_vcnt - 1];
 
+		/* 要操作的页是同一个，同时上一个bio操作的结束地址是本次bio的起始地址，所以可以进行bio合并 */
 		if (page == bv->bv_page &&
 		    offset == bv->bv_offset + bv->bv_len) {
 			bv->bv_len += len;
@@ -845,7 +847,7 @@ int bio_add_page(struct bio *bio, struct page *page,
 
 	bio->bi_vcnt++;
 done:
-	bio->bi_iter.bi_size += len;
+	bio->bi_iter.bi_size += len;  //增加bio传输的总字节数
 	return len;
 }
 EXPORT_SYMBOL(bio_add_page);

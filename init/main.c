@@ -88,6 +88,14 @@
 #include <asm/sections.h>
 #include <asm/cacheflush.h>
 
+/*ADD*/
+//测试伙伴系统中的数据
+extern void show_buddy_info_test(void);
+//测试每CPU页框高速缓存中的数据
+extern void show_per_cpu_pageset_info_test(void);
+
+/*end ADD*/
+
 static int kernel_init(void *);
 
 extern void init_IRQ(void);
@@ -403,7 +411,7 @@ static noinline void __init_refok rest_init(void)
 	 * at least once to get things moving:
 	 */
 	init_idle_bootup_task(current);
-	schedule_preempt_disabled();
+	schedule_preempt_disabled();   //比较重要
 	/* Call into cpu_idle with preempt disabled */
 	cpu_startup_entry(CPUHP_ONLINE);
 }
@@ -458,7 +466,7 @@ void __init __weak thread_info_cache_init(void)
 }
 #endif
 
-/*
+/* 初始化内核内存分配器，过渡到伙伴系统，启动slab机制，初始化非连续内存区
  * Set up kernel memory allocators
  */
 static void __init mm_init(void)
@@ -467,11 +475,20 @@ static void __init mm_init(void)
 	 * page_ext requires contiguous pages,
 	 * bigger than MAX_ORDER unless SPARSEMEM.
 	 */
-	page_ext_init_flatmem();
+	page_ext_init_flatmem();  //空
+	/* 初始化内存分配器，并将页框释放到伙伴系统中 */
 	mem_init();
+
+	/*ADD*/
+	show_buddy_info_test();
+	/*end ADD*/
+	
+	/* 初始化slub分配器 */
 	kmem_cache_init();
 	percpu_init_late();
+	/* 初始化页表 */
 	pgtable_init();
+	/* 初始化非连续内存区 */
 	vmalloc_init();
 	ioremap_huge_init();
 }
@@ -502,6 +519,7 @@ asmlinkage __visible void __init start_kernel(void)
 	boot_cpu_init();
 	page_address_init();
 	pr_notice("%s", linux_banner);
+	/* 特定于体系结构的设置 */
 	setup_arch(&command_line);
 	mm_init_cpumask(&init_mm);
 	setup_command_line(command_line);
@@ -534,7 +552,8 @@ asmlinkage __visible void __init start_kernel(void)
 	vfs_caches_init_early();
 	sort_main_extable();
 	trap_init();
-	mm_init();
+	/* 初始化内核内存分配器，过渡到伙伴系统，启动slab机制，初始化非连续内存区 */
+	mm_init(); 
 
 	/*
 	 * Set up the scheduler prior starting any interrupts (such as the
@@ -609,7 +628,13 @@ asmlinkage __visible void __init start_kernel(void)
 	page_ext_init();
 	debug_objects_mem_init();
 	kmemleak_init();
+	/* 初始化每CPU页框高速缓存 */
 	setup_per_cpu_pageset();
+
+	/*ADD*/
+	//show_per_cpu_pageset_info_test(); //测试每CPU页框高速缓存
+	/*end ADD*/
+	
 	numa_policy_init();
 	if (late_time_init)
 		late_time_init();
@@ -647,6 +672,7 @@ asmlinkage __visible void __init start_kernel(void)
 
 	check_bugs();
 
+	/*有一些页面的释放*/
 	acpi_subsystem_init();
 	sfi_init_late();
 
@@ -657,6 +683,7 @@ asmlinkage __visible void __init start_kernel(void)
 
 	ftrace_init();
 
+	show_per_cpu_pageset_info_test();
 	/* Do the rest non-__init'ed, we're now alive */
 	rest_init();
 }

@@ -14,6 +14,12 @@
 struct page;
 struct address_space;
 
+/* 是一个每CPU变量
+	最多存放14个page指针，一共占据2^4字节
+
+	要加入到lru链表的page都要加入到这个pagevec了，并不再直接往lru中加入了；
+	其实是一个暂存page的容器，等到积累到足够的page之后，在添加到lru链表中。
+*/
 struct pagevec {
 	unsigned long nr;
 	unsigned long cold;

@@ -1153,6 +1153,7 @@ void __init setup_arch(char **cmdline_p)
 
 	early_acpi_boot_init();
 
+	/* 初始化bootmem */
 	initmem_init();
 	dma_contiguous_reserve(max_pfn_mapped << PAGE_SHIFT);
 
@@ -1168,6 +1169,7 @@ void __init setup_arch(char **cmdline_p)
 	kvmclock_init();
 #endif
 
+	/* 此处调用了paging_init函数，初始化node、zone、page等结构 */
 	x86_init.paging.pagetable_init();
 
 	kasan_init();

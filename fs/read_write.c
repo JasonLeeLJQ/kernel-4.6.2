@@ -311,6 +311,7 @@ static inline void fdput_pos(struct fd f)
 {
 	if (f.flags & FDPUT_POS_UNLOCK)
 		mutex_unlock(&f.file->f_pos_lock);
+	/* 递减文件对象引用计数 */
 	fdput(f);
 }
 
@@ -448,17 +449,19 @@ int rw_verify_area(int read_write, struct file *file, const loff_t *ppos, size_t
 	return count > MAX_RW_COUNT ? MAX_RW_COUNT : count;
 }
 
+/* 执行异步I/O读取 */
 static ssize_t new_sync_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos)
 {
 	struct iovec iov = { .iov_base = buf, .iov_len = len };
-	struct kiocb kiocb;
+	struct kiocb kiocb;  //临时变量kiocb，它是用来跟踪记录即将进行I/O操作的完成状态
 	struct iov_iter iter;
 	ssize_t ret;
 
-	init_sync_kiocb(&kiocb, filp);
+	init_sync_kiocb(&kiocb, filp);  //初始化kiocb，设置对象为同步操作
 	kiocb.ki_pos = *ppos;
 	iov_iter_init(&iter, READ, &iov, 1, len);
 
+	/* 调用具体文件系统的read_iter异步I/O操作 */
 	ret = filp->f_op->read_iter(&kiocb, &iter);
 	BUG_ON(ret == -EIOCBQUEUED);
 	*ppos = kiocb.ki_pos;
@@ -468,6 +471,7 @@ static ssize_t new_sync_read(struct file *filp, char __user *buf, size_t len, lo
 ssize_t __vfs_read(struct file *file, char __user *buf, size_t count,
 		   loff_t *pos)
 {
+	/* 具体的文件系统，read操作和read_iter操作必须实现其中一个，优先级最高的是read操作 */
 	if (file->f_op->read)
 		return file->f_op->read(file, buf, count, pos);
 	else if (file->f_op->read_iter)
@@ -477,25 +481,33 @@ ssize_t __vfs_read(struct file *file, char __user *buf, size_t count,
 }
 EXPORT_SYMBOL(__vfs_read);
 
+/* VFS的读文件过程 */
 ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 {
 	ssize_t ret;
 
+	/* 检查文件的访问模式，若不允许读，则返回-EBADF */
 	if (!(file->f_mode & FMODE_READ))
 		return -EBADF;
 	if (!(file->f_mode & FMODE_CAN_READ))
 		return -EINVAL;
+	/* 判断buf是否位于用户空间，不在的话返回-EFAULT（VERIFY_WRITE表示用户buf是否可写） */
 	if (unlikely(!access_ok(VERIFY_WRITE, buf, count)))
 		return -EFAULT;
 
+	/* 检查要访问的文件部分是否有冲突的强制锁，通过inode结构lock当前要操作的区域 */
 	ret = rw_verify_area(READ, file, pos, count);
 	if (ret >= 0) {
 		count = ret;
+		/* 执行真正文件读 */
 		ret = __vfs_read(file, buf, count, pos);
-		if (ret > 0) {
+		if (ret > 0) {  //文件读操作成功，返回读取的字节数>0
+			/* 调用fsnotify_access（）通知文件被读取 */
 			fsnotify_access(file);
+			/* 增加当前进程读取的字节数 */
 			add_rchar(current, ret);
 		}
+		/* 增加当前进程read系统调用的次数 */
 		inc_syscr(current);
 	}
 
@@ -504,21 +516,27 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 
 EXPORT_SYMBOL(vfs_read);
 
+/* 与旧版本的do_sync_write函数作用相同 */
 static ssize_t new_sync_write(struct file *filp, const char __user *buf, size_t len, loff_t *ppos)
 {
+	//struct iovec iov记录用户空间地址和长度
 	struct iovec iov = { .iov_base = (void __user *)buf, .iov_len = len };
+	//struct kiocb kiocb记录IO完成状态，并初始化（file，flags）
 	struct kiocb kiocb;
 	struct iov_iter iter;
 	ssize_t ret;
 
+	/* 初始化I/O控制块kiocb */
 	init_sync_kiocb(&kiocb, filp);
 	kiocb.ki_pos = *ppos;
+	
 	iov_iter_init(&iter, WRITE, &iov, 1, len);
 
+	/* 采用异步写来完成同步写操作 */
 	ret = filp->f_op->write_iter(&kiocb, &iter);
 	BUG_ON(ret == -EIOCBQUEUED);
 	if (ret > 0)
-		*ppos = kiocb.ki_pos;
+		*ppos = kiocb.ki_pos;  //更新ppos参数，返回
 	return ret;
 }
 
@@ -560,27 +578,34 @@ ssize_t __kernel_write(struct file *file, const char *buf, size_t count, loff_t 
 
 EXPORT_SYMBOL(__kernel_write);
 
+/* 虚拟文件的写过程 */
 ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos)
 {
 	ssize_t ret;
 
+	/* 检查进程的访问模式f_mode */
 	if (!(file->f_mode & FMODE_WRITE))
 		return -EBADF;
 	if (!(file->f_mode & FMODE_CAN_WRITE))
 		return -EINVAL;
+	/* access_ok()粗略检查buf和count参数 */
 	if (unlikely(!access_ok(VERIFY_READ, buf, count)))
 		return -EFAULT;
 
+	/* 检查要访问的文件部分是否有冲突的强制锁，若有返回错误码 */
 	ret = rw_verify_area(WRITE, file, pos, count);
 	if (ret >= 0) {
 		count = ret;
 		file_start_write(file);
+
+		/* 调用底层文件系统自定义写操作方法 */
 		ret = __vfs_write(file, buf, count, pos);
 		if (ret > 0) {
+			//文件系统写操作报告给notify系统
 			fsnotify_modify(file);
-			add_wchar(current, ret);
+			add_wchar(current, ret); // 增加任务操作字符计数
 		}
-		inc_syscw(current);
+		inc_syscw(current);  //增加任务系统调用计数
 		file_end_write(file);
 	}
 
@@ -599,12 +624,15 @@ static inline void file_pos_write(struct file *file, loff_t pos)
 	file->f_pos = pos;
 }
 
+/* sys_read */
 SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 {
+	/* 由文件描述符fd得到file和flags */
 	struct fd f = fdget_pos(fd);
 	ssize_t ret = -EBADF;
 
 	if (f.file) {
+		/* 获得当前文件的读写位置 */
 		loff_t pos = file_pos_read(f.file);
 		ret = vfs_read(f.file, buf, count, &pos);
 		if (ret >= 0)
@@ -617,6 +645,7 @@ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf,
 		size_t, count)
 {
+	/*由文件描述符fd得到对应的struct file结构 ,并获得标志位*/
 	struct fd f = fdget_pos(fd);
 	ssize_t ret = -EBADF;
 

@@ -93,7 +93,7 @@ extern struct super_block *user_get_super(dev_t);
  * open.c
  */
 struct open_flags {
-	int open_flag;
+	int open_flag;  //文件打开的标志位
 	umode_t mode;
 	int acc_mode;
 	int intent;

@@ -796,16 +796,19 @@ COMPAT_SYSCALL_DEFINE5(mount, const char __user *, dev_name,
 	char *kernel_dev;
 	int retval;
 
+	/* 获取mount类型 */
 	kernel_type = copy_mount_string(type);
 	retval = PTR_ERR(kernel_type);
 	if (IS_ERR(kernel_type))
 		goto out;
 
+	 /* 获取设备名称字符串 */
 	kernel_dev = copy_mount_string(dev_name);
 	retval = PTR_ERR(kernel_dev);
 	if (IS_ERR(kernel_dev))
 		goto out1;
 
+	/* 获取其它选项 */ 
 	options = copy_mount_options(data);
 	retval = PTR_ERR(options);
 	if (IS_ERR(options))
@@ -821,6 +824,7 @@ COMPAT_SYSCALL_DEFINE5(mount, const char __user *, dev_name,
 		}
 	}
 
+	/* 主要函数，执行挂载文件系统的具体操作 */ 
 	retval = do_mount(kernel_dev, dir_name, kernel_type, flags, options);
 
  out3:

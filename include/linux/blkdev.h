@@ -826,6 +826,7 @@ extern void blk_execute_rq_nowait(struct request_queue *, struct gendisk *,
 
 bool blk_poll(struct request_queue *q, blk_qc_t cookie);
 
+/* 获取与块设备相关的请求队列q */
 static inline struct request_queue *bdev_get_queue(struct block_device *bdev)
 {
 	return bdev->bd_disk->queue;	/* this is never NULL */

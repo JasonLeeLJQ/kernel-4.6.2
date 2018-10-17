@@ -727,6 +727,7 @@ struct file *fget_raw(unsigned int fd)
 EXPORT_SYMBOL(fget_raw);
 
 /*
+	由文件描述符fd得到对应的struct file结构
  * Lightweight file lookup - no refcnt increment if fd table isn't shared.
  *
  * You can use this instead of fget if you satisfy all of the following
@@ -744,15 +745,17 @@ EXPORT_SYMBOL(fget_raw);
  */
 static unsigned long __fget_light(unsigned int fd, fmode_t mask)
 {
+	//current：当前进程的task_struct
 	struct files_struct *files = current->files;
 	struct file *file;
 
-	if (atomic_read(&files->count) == 1) {
+	if (atomic_read(&files->count) == 1) {  //不存在共享
+		/* 由文件描述符fd得到对应的struct file结构 */
 		file = __fcheck_files(files, fd);
 		if (!file || unlikely(file->f_mode & mask))
 			return 0;
 		return (unsigned long)file;
-	} else {
+	} else {  //存在多进程共享
 		file = __fget(fd, mask);
 		if (!file)
 			return 0;
@@ -772,6 +775,7 @@ unsigned long __fdget_raw(unsigned int fd)
 
 unsigned long __fdget_pos(unsigned int fd)
 {
+	/* 由文件描述符fd得到对应的struct file结构 ，此时file结构的地址转换成unsigned int类型返回了*/
 	unsigned long v = __fdget(fd);
 	struct file *file = (struct file *)(v & ~3);
 

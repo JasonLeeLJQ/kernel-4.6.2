@@ -170,11 +170,13 @@ SYSCALL_DEFINE1(syncfs, int, fd)
 }
 
 /**
+	同步一部分数据或元数据到磁盘
+	参数 datasync：是否执行数据同步，不执行元数据同步
  * vfs_fsync_range - helper to sync a range of data & metadata to disk
  * @file:		file to sync
  * @start:		offset in bytes of the beginning of data range to sync
  * @end:		offset in bytes of the end of data range (inclusive)
- * @datasync:		perform only datasync
+ * @datasync:		perform only datasync  
  *
  * Write back data in range @start..@end and metadata for @file to disk.  If
  * @datasync is set only metadata needed to access modified file data is
@@ -192,6 +194,7 @@ int vfs_fsync_range(struct file *file, loff_t start, loff_t end, int datasync)
 		spin_unlock(&inode->i_lock);
 		mark_inode_dirty_sync(inode);
 	}
+	/* 执行f2fs的文件同步：f2fs_sync_file */
 	return file->f_op->fsync(file, start, end, datasync);
 }
 EXPORT_SYMBOL(vfs_fsync_range);

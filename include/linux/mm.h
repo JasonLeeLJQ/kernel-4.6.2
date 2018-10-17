@@ -725,6 +725,7 @@ static inline bool is_zone_device_page(const struct page *page)
 }
 #endif
 
+//增加页的引用计数
 static inline void get_page(struct page *page)
 {
 	page = compound_head(page);
@@ -739,6 +740,7 @@ static inline void get_page(struct page *page)
 		get_zone_device_page(page);
 }
 
+//减少页的引用计数
 static inline void put_page(struct page *page)
 {
 	page = compound_head(page);

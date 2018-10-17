@@ -181,6 +181,8 @@ static __always_inline int PageCompound(struct page *page)
 		page;})
 
 /*
+	测试page标志位的一些宏，这些宏适用于所有的page标志位。
+	如PageSwapBacked（）
  * Macros to create function definitions for page flags
  */
 #define TESTPAGEFLAG(uname, lname, policy)				\

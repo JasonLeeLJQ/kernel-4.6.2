@@ -508,11 +508,12 @@ int __radix_tree_create(struct radix_tree_root *root, unsigned long index,
 }
 
 /**
+	将一个对象（例如page）插入到radix树中
  *	__radix_tree_insert    -    insert into a radix tree
  *	@root:		radix tree root
- *	@index:		index key
+ *	@index:		index key  插入的位置
  *	@order:		key covers the 2^order indices around index
- *	@item:		item to insert
+ *	@item:		item to insert  要插入的对象（page）
  *
  *	Insert an item into the radix tree at position @index.
  */
@@ -525,11 +526,14 @@ int __radix_tree_insert(struct radix_tree_root *root, unsigned long index,
 
 	BUG_ON(radix_tree_is_indirect_ptr(item));
 
+	/* 找到index对应的slot的位置，位置返回到slot中 */
 	error = __radix_tree_create(root, index, order, &node, &slot);
 	if (error)
 		return error;
 	if (*slot != NULL)
 		return -EEXIST;
+
+	/* 通过上一步获得的slot的位置，将item对象赋值给slot，完成插入过程 */
 	rcu_assign_pointer(*slot, item);
 
 	if (node) {

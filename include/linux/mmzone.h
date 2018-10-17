@@ -259,7 +259,12 @@ struct per_cpu_pages {
 };
 
 struct per_cpu_pageset {
-	struct per_cpu_pages pcp;
+	struct per_cpu_pages pcp;     //为DRAM页面单独维护一个每CPU页框高速缓存
+	
+	/*ADD*/
+	struct per_cpu_pages pcp_new;  //为NVM页面单独维护一个每CPU页框高速缓存
+	/*end ADD*/
+	
 #ifdef CONFIG_NUMA
 	s8 expire;
 #endif
@@ -358,7 +363,7 @@ struct zone {
 	unsigned int inactive_ratio;
 
 	struct pglist_data	*zone_pgdat;
-	struct per_cpu_pageset __percpu *pageset;
+	struct per_cpu_pageset __percpu *pageset;  //每CPU页框高速缓存
 
 	/*
 	 * This is a per-zone reserve of pages that are not available
@@ -476,8 +481,21 @@ struct zone {
 
 	ZONE_PADDING(_pad1_)
 	/* free areas of different sizes */
-	struct free_area	free_area[MAX_ORDER];
+	struct free_area	free_area[MAX_ORDER];     /*存储DRAM页面的伙伴系统*/
+	/*ADD*/
+	struct free_area    free_area_new[MAX_ORDER];  /*存储NVM页面的伙伴系统*/
+	/*end ADD*/
 
+	/*ADD*/
+	struct list_head DF_head;   //DRAM_FIRST clock链表的头指针
+	struct list_head DS_head;	  //DRAM_SECOND clock链表的头指针
+	struct list_head NF_head;   //NVM_FIRST clock链表的头指针
+	struct list_head NS_head;   //NVM_SECOND clock链表的头指针
+
+	struct list_head DH_head;   //DRAM中的历史队列
+	struct list_head NH_head;   //NVM中的历史队列
+	/*end ADD*/
+	
 	/* zone flags, see below */
 	unsigned long		flags;
 
@@ -490,7 +508,7 @@ struct zone {
 
 	/* Fields commonly accessed by the page reclaim scanner */
 	spinlock_t		lru_lock;
-	struct lruvec		lruvec;
+	struct lruvec		lruvec;  //LRU链表
 
 	/*
 	 * When free pages are below this point, additional steps are taken

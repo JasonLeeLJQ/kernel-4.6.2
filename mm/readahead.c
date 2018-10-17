@@ -116,18 +116,23 @@ static int read_pages(struct address_space *mapping, struct file *filp,
 
 	blk_start_plug(&plug);
 
+	/* f2fs:address_space_operations对象中的readpages方法实现为f2fs_read_data_pages */
 	if (mapping->a_ops->readpages) {
 		ret = mapping->a_ops->readpages(filp, mapping, pages, nr_pages);
 		/* Clean up the remaining pages */
-		put_pages_list(pages);
+		put_pages_list(pages); /* 释放lru链表中的所有page */
 		goto out;
 	}
 
+	/* 若readpages方法没有定义，则readpage方法来每次读取一页 
+		f2fs:address_space_operations对象中的readpage方法实现为f2fs_read_data_page
+	*/
 	for (page_idx = 0; page_idx < nr_pages; page_idx++) {
 		struct page *page = lru_to_page(pages);
 		list_del(&page->lru);
 		if (!add_to_page_cache_lru(page, mapping, page->index,
 				mapping_gfp_constraint(mapping, GFP_KERNEL))) {
+			/* readpage方法来每次读取一页  */
 			mapping->a_ops->readpage(filp, page);
 		}
 		put_page(page);
@@ -141,6 +146,8 @@ out:
 }
 
 /*
+	真正进行文件预读的操作
+	申请若干页，读取磁盘中的文件，并将页加入到页缓存
  * __do_page_cache_readahead() actually reads a chunk of disk.  It allocates all
  * the pages first, then submits them all for I/O. This avoids the very bad
  * behaviour which would occur if page allocations are causing VM writeback.
@@ -166,6 +173,8 @@ int __do_page_cache_readahead(struct address_space *mapping, struct file *filp,
 	end_index = ((isize - 1) >> PAGE_SHIFT);
 
 	/*
+		在从磁盘上读数据前，首先预分配一些内存页面，用来存放读取的文件数据
+		共分配nr_to_read个页面
 	 * Preallocate as many pages as we will need.
 	 */
 	for (page_idx = 0; page_idx < nr_to_read; page_idx++) {
@@ -175,22 +184,30 @@ int __do_page_cache_readahead(struct address_space *mapping, struct file *filp,
 			break;
 
 		rcu_read_lock();
+		/*在预读过程中，可能有其他进程已经将某些页面读进内存，因此在此检查页面是否已经在Cache中（*/
 		page = radix_tree_lookup(&mapping->page_tree, page_offset);
 		rcu_read_unlock();
 		if (page && !radix_tree_exceptional_entry(page))
 			continue;
 
+		/* 申请若干个page */
 		page = page_cache_alloc_readahead(mapping);
 		if (!page)
 			break;
 		page->index = page_offset;
+		/* 将页面插入page_pool */
 		list_add(&page->lru, &page_pool);
+
+		/* 当分配到第nr_to_read ‐ lookahead_size个页面时，就设置该页面标志PG_readahead，
+		便于下次进行异步预读 */
 		if (page_idx == nr_to_read - lookahead_size)
 			SetPageReadahead(page);
 		ret++;
 	}
 
 	/*
+		开始I/O操作
+		从磁盘中读取数据放到之前申请的页面中，这些页面使用page_pool进行管理。
 	 * Now start the IO.  We ignore I/O errors - if the page is not
 	 * uptodate then the caller will launch readpage again, and
 	 * will then handle the error.
@@ -237,6 +254,7 @@ int force_page_cache_readahead(struct address_space *mapping, struct file *filp,
  * for 128k (32 page) max ra
  * 1-8 page = 32k initial, > 8 page = 128k initial
  */
+ /* 计算初始预读窗口大小 */
 static unsigned long get_init_ra_size(unsigned long size, unsigned long max)
 {
 	unsigned long newsize = roundup_pow_of_two(size);
@@ -255,6 +273,7 @@ static unsigned long get_init_ra_size(unsigned long size, unsigned long max)
  *  Get the previous window size, ramp it up, and
  *  return it as the new window size.
  */
+/*计算下一个预读窗口大小。*/
 static unsigned long get_next_ra_size(struct file_ra_state *ra,
 						unsigned long max)
 {
@@ -361,6 +380,7 @@ static int try_context_readahead(struct address_space *mapping,
 }
 
 /*
+	执行真正的文件预读
  * A minimal readahead algorithm for trivial sequential/random reads.
  */
 static unsigned long
@@ -374,6 +394,7 @@ ondemand_readahead(struct address_space *mapping,
 
 	/*
 	 * start of file
+	 	如果从文件头开始读取，初始化预读信息
 	 */
 	if (!offset)
 		goto initial_readahead;
@@ -436,7 +457,7 @@ ondemand_readahead(struct address_space *mapping,
 	if (try_context_readahead(mapping, ra, offset, req_size, max))
 		goto readit;
 
-	/*
+	/*小的随机读过程
 	 * standalone, small random read
 	 * Read as is, and do not pollute the readahead state.
 	 */
@@ -444,6 +465,7 @@ ondemand_readahead(struct address_space *mapping,
 
 initial_readahead:
 	ra->start = offset;
+	/* 计算初始预读窗口大小 */
 	ra->size = get_init_ra_size(req_size, max);
 	ra->async_size = ra->size > req_size ? ra->size - req_size : ra->size;
 
@@ -462,6 +484,8 @@ readit:
 }
 
 /**
+	执行文件预读，将部分page读到页缓存中
+	当page在页缓存中未命中时，执行文件预读操作。
  * page_cache_sync_readahead - generic file readahead
  * @mapping: address_space which holds the pagecache and I/O vectors
  * @ra: file_ra_state which holds the readahead state
@@ -484,17 +508,22 @@ void page_cache_sync_readahead(struct address_space *mapping,
 		return;
 
 	/* be dumb */
+	/* 随机读模式，不启用文件预读 */
 	if (filp && (filp->f_mode & FMODE_RANDOM)) {
 		force_page_cache_readahead(mapping, filp, offset, req_size);
 		return;
 	}
 
-	/* do read-ahead */
+	/* do read-ahead 
+	顺序读模式，启用文件预读
+	*/
 	ondemand_readahead(mapping, ra, filp, false, offset, req_size);
 }
 EXPORT_SYMBOL_GPL(page_cache_sync_readahead);
 
 /**
+	当使用具有PG_readahead标志的页面时，应调用page_cache_async_readahead（）;
+	这是一个标记，表明应用程序已经用尽了足够的预读窗口，我们应该开始预读更多的页面。
  * page_cache_async_readahead - file readahead for marked pages
  * @mapping: address_space which holds the pagecache and I/O vectors
  * @ra: file_ra_state which holds the readahead state
@@ -502,7 +531,7 @@ EXPORT_SYMBOL_GPL(page_cache_sync_readahead);
  * @page: the page at @offset which has the PG_readahead flag set
  * @offset: start offset into @mapping, in pagecache page-sized units
  * @req_size: hint: total size of the read which the caller is performing in
- *            pagecache pages
+ *            pagecache pages 进行读操作一共需要读取的总页数。
  *
  * page_cache_async_readahead() should be called when a page is used which
  * has the PG_readahead flag; this is a marker to suggest that the application
@@ -516,24 +545,28 @@ page_cache_async_readahead(struct address_space *mapping,
 			   unsigned long req_size)
 {
 	/* no read-ahead */
-	if (!ra->ra_pages)
+	if (!ra->ra_pages)  //不需要预读
 		return;
 
 	/*
 	 * Same bit is used for PG_readahead and PG_reclaim.
 	 */
-	if (PageWriteback(page))
+	if (PageWriteback(page))  //页面处于回写状态
 		return;
 
+	//通过前面的检查后，就清除页面PG_readahead标志
 	ClearPageReadahead(page);
 
 	/*
 	 * Defer asynchronous read-ahead on IO congestion.
+	 	在执行预读前，还要检查当前磁盘I/O是否处于拥塞状态，若处于拥塞就不能再进行预读
 	 */
 	if (inode_read_congested(mapping->host))
 		return;
 
-	/* do read-ahead */
+	/* do read-ahead 
+	真正执行预读
+	*/
 	ondemand_readahead(mapping, ra, filp, true, offset, req_size);
 }
 EXPORT_SYMBOL_GPL(page_cache_async_readahead);

@@ -22,6 +22,7 @@
 #include "acl.h"
 #include <trace/events/f2fs.h>
 
+/* 创建一个新的inode节点 */
 static struct inode *f2fs_new_inode(struct inode *dir, umode_t mode)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(dir);
@@ -30,11 +31,14 @@ static struct inode *f2fs_new_inode(struct inode *dir, umode_t mode)
 	bool nid_free = false;
 	int err;
 
-	inode = new_inode(dir->i_sb);
+	/* 申请一个新的inode（通用函数），调用了alloc_inode */
+	inode = new_inode(dir->i_sb);   /* 创建一个inode节点，这个函数就是在fs/inode.c中的new_inode函数 */
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
 
 	f2fs_lock_op(sbi);
+
+	/* 为inode申请一个inode号 */
 	if (!alloc_nid(sbi, &ino)) {
 		f2fs_unlock_op(sbi);
 		err = -ENOSPC;
@@ -42,6 +46,8 @@ static struct inode *f2fs_new_inode(struct inode *dir, umode_t mode)
 	}
 	f2fs_unlock_op(sbi);
 
+	/* 下面继续对inode成员进行初始化，上面的new_inode已经对一部分成员初始化了 */
+	
 	inode_init_owner(inode, dir, mode);
 
 	inode->i_ino = ino;
@@ -56,7 +62,9 @@ static struct inode *f2fs_new_inode(struct inode *dir, umode_t mode)
 		goto fail;
 	}
 
-	/* If the directory encrypted, then we should encrypt the inode. */
+	/* If the directory encrypted, then we should encrypt the inode.
+		如果目录是加密的，则也要对inode进行加密
+	*/
 	if (f2fs_encrypted_inode(dir) && f2fs_may_encrypt(inode))
 		f2fs_set_encrypted_inode(inode);
 
@@ -120,6 +128,7 @@ static inline void set_cold_files(struct f2fs_sb_info *sbi, struct inode *inode,
 	}
 }
 
+/* f2fs创建一个inode */
 static int f2fs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 						bool excl)
 {

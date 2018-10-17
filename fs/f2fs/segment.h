@@ -176,6 +176,7 @@ struct sec_entry {
 };
 
 struct segment_allocation {
+	/* 默认申请segment操作：allocate_segment_by_default */
 	void (*allocate_segment)(struct f2fs_sb_info *, int, bool);
 };
 
@@ -194,13 +195,20 @@ struct inmem_pages {
 	block_t old_addr;		/* for revoking when fail to commit */
 };
 
+/*
+	SIT 为每个 Segment 存储74字节的信息且与 Segment Summaries 分离，因为它修改的频率更高。
+	它主要用来跟踪哪些数据块仍然是有效的(有效块个数以及数据块有效性 bitmap)，
+因而当 Segment 中无有效块时，就可以回收该 Segment，或者当该 Segment 中有效数据块很少的时候进行 clean 操作。
+	SIT同样记录了上次修改segment的时间，可以依据它判断segment的年龄，在GC的cost-benefit算法中很重要。
+	SIT为每一个block提供一个bit，组成bitmap，标识该block是否有效（valid）。
+*/
 struct sit_info {
 	const struct segment_allocation *s_ops;
 
 	block_t sit_base_addr;		/* start block address of SIT area */
 	block_t sit_blocks;		/* # of blocks used by SIT area */
 	block_t written_valid_blocks;	/* # of valid blocks in main area */
-	char *sit_bitmap;		/* SIT bitmap pointer */
+	char *sit_bitmap;		/* SIT bitmap pointer 指向位图*/
 	unsigned int bitmap_size;	/* SIT bitmap size */
 
 	unsigned long *tmp_map;			/* bitmap for temporal use */
@@ -208,16 +216,19 @@ struct sit_info {
 	unsigned int dirty_sentries;		/* # of dirty sentries */
 	unsigned int sents_per_block;		/* # of SIT entries per block */
 	struct mutex sentry_lock;		/* to protect SIT cache */
-	struct seg_entry *sentries;		/* SIT segment-level cache */
+	struct seg_entry *sentries;		/* SIT segment-level cache、缓存内存中的所有seg_entry */
 	struct sec_entry *sec_entries;		/* SIT section-level cache */
 
-	/* for cost-benefit algorithm in cleaning procedure */
+	/* for cost-benefit algorithm in cleaning procedure
+	记录了上次修改segment的时间，可以依据它判断segment的年龄，在GC的cost-benefit算法中很重要
+	*/
 	unsigned long long elapsed_time;	/* elapsed time after mount */
 	unsigned long long mounted_time;	/* mount time */
 	unsigned long long min_mtime;		/* min. modification time */
 	unsigned long long max_mtime;		/* max. modification time */
 };
 
+/* 空闲segment信息 */
 struct free_segmap_info {
 	unsigned int start_segno;	/* start segment number logically */
 	unsigned int free_segments;	/* # of free segments */
@@ -254,27 +265,32 @@ struct victim_selection {
 							int, int, char);
 };
 
-/* for active log information */
+/* for active log information 
+	当前segment的信息
+	一共有6个不同类型的segment，以数组形式组织的
+*/
 struct curseg_info {
 	struct mutex curseg_mutex;		/* lock for consistency */
 	struct f2fs_summary_block *sum_blk;	/* cached summary block */
 	struct rw_semaphore journal_rwsem;	/* protect journal area */
 	struct f2fs_journal *journal;		/* cached journal info */
-	unsigned char alloc_type;		/* current allocation type */
-	unsigned int segno;			/* current segment number */
-	unsigned short next_blkoff;		/* next block offset to write */
-	unsigned int zone;			/* current zone number */
-	unsigned int next_segno;		/* preallocated segment */
+	unsigned char alloc_type;		/* current allocation type 申请segment采用的方法，LFS或SSR*/
+	unsigned int segno;			/* current segment number 当前segment号*/
+	unsigned short next_blkoff;		/* next block offset to write 下一个要写入块的偏移量*/
+	unsigned int zone;			/* current zone number 当前zone号*/
+	unsigned int next_segno;		/* preallocated segment 预先申请的segment号，等到当前segment用完了，就使用该segment*/
 };
 
+/* sit entry集合，由多个sit entry组成 */
 struct sit_entry_set {
-	struct list_head set_list;	/* link with all sit sets */
+	struct list_head set_list;	/* link with all sit sets，所有的sit_entry_set组成的链表*/
 	unsigned int start_segno;	/* start segno of sits in set */
 	unsigned int entry_cnt;		/* the # of sit entries in set */
 };
 
 /*
  * inline functions
+ 	依据type找到对应的struct curseg_info结构（因为是数组方式组织的，直接使用下标即可访问）
  */
 static inline struct curseg_info *CURSEG_I(struct f2fs_sb_info *sbi, int type)
 {
@@ -319,6 +335,7 @@ static inline void seg_info_from_raw_sit(struct seg_entry *se,
 	se->mtime = le64_to_cpu(rs->mtime);
 }
 
+/*将journal中的f2fs_sit_entry刷回到SSD中的SIT区域（也就是f2fs_sit_block）。*/
 static inline void seg_info_to_raw_sit(struct seg_entry *se,
 					struct f2fs_sit_entry *rs)
 {
@@ -714,6 +731,7 @@ static inline int nr_pages_to_skip(struct f2fs_sb_info *sbi, int type)
 
 /*
  * When writing pages, it'd better align nr_to_write for segment size.
+  写入pages的时候，最好将nr_to_write和segment大小对齐
  */
 static inline long nr_pages_to_write(struct f2fs_sb_info *sbi, int type,
 					struct writeback_control *wbc)

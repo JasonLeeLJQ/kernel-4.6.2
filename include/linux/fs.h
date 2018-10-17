@@ -427,6 +427,7 @@ int pagecache_write_end(struct file *, struct address_space *mapping,
 				loff_t pos, unsigned len, unsigned copied,
 				struct page *page, void *fsdata);
 
+/* 用于页缓存 */
 struct address_space {
 	struct inode		*host;		/* owner: inode, block_device */
 	struct radix_tree_root	page_tree;	/* radix tree of all pages */
@@ -440,10 +441,10 @@ struct address_space {
 	unsigned long		nrexceptional;
 	pgoff_t			writeback_index;/* writeback starts here */
 	const struct address_space_operations *a_ops;	/* methods */
-	unsigned long		flags;		/* error bits/gfp mask */
+	unsigned long		flags;		/* error bits/gfp mask 申请page使用的标志位gfp_mask*/
 	spinlock_t		private_lock;	/* for use by the address_space */
 	struct list_head	private_list;	/* ditto */
-	void			*private_data;	/* ditto */
+	void			*private_data;	/* ditto */	
 } __attribute__((aligned(sizeof(long))));
 	/*
 	 * On most architectures that alignment is already the case; but
@@ -455,7 +456,7 @@ struct request_queue;
 struct block_device {
 	dev_t			bd_dev;  /* not a kdev_t - it's a search key */
 	int			bd_openers;
-	struct inode *		bd_inode;	/* will die */
+	struct inode *		bd_inode;	/* will die ，指向块设备文件的索引节点inode*/
 	struct super_block *	bd_super;
 	struct mutex		bd_mutex;	/* open/close mutex */
 	struct list_head	bd_inodes;
@@ -600,7 +601,7 @@ struct inode {
 
 	const struct inode_operations	*i_op;
 	struct super_block	*i_sb;
-	struct address_space	*i_mapping;
+	struct address_space	*i_mapping;  //对应于普通文件的页缓存
 
 #ifdef CONFIG_SECURITY
 	void			*i_security;
@@ -619,7 +620,7 @@ struct inode {
 		const unsigned int i_nlink;
 		unsigned int __i_nlink;
 	};
-	dev_t			i_rdev;
+	dev_t			i_rdev;  //块设备号、主从设备号（只有inode代表块设备时才设置）
 	loff_t			i_size;
 	struct timespec		i_atime;
 	struct timespec		i_mtime;
@@ -651,7 +652,7 @@ struct inode {
 	u16			i_wb_frn_history;
 #endif
 	struct list_head	i_lru;		/* inode LRU list */
-	struct list_head	i_sb_list;
+	struct list_head	i_sb_list;  /* inode连接到超级块s_inodes链表中 */
 	union {
 		struct hlist_head	i_dentry;
 		struct rcu_head		i_rcu;
@@ -665,11 +666,11 @@ struct inode {
 #endif
 	const struct file_operations	*i_fop;	/* former ->i_op->default_file_ops */
 	struct file_lock_context	*i_flctx;
-	struct address_space	i_data;
+	struct address_space	i_data;    //对应于块设备文件的页缓存
 	struct list_head	i_devices;
 	union {
 		struct pipe_inode_info	*i_pipe;
-		struct block_device	*i_bdev;
+		struct block_device	*i_bdev;   //块设备inode对应的块设备描述符
 		struct cdev		*i_cdev;
 		char			*i_link;
 	};
@@ -1344,7 +1345,7 @@ struct super_block {
 
 	struct hlist_bl_head	s_anon;		/* anonymous dentries for (nfs) exporting */
 	struct list_head	s_mounts;	/* list of mounts; _not_ for fs use */
-	struct block_device	*s_bdev;
+	struct block_device	*s_bdev;  //对应的块设备
 	struct backing_dev_info *s_bdi;
 	struct mtd_info		*s_mtd;
 	struct hlist_node	s_instances;
@@ -1356,6 +1357,7 @@ struct super_block {
 	char s_id[32];				/* Informational name */
 	u8 s_uuid[16];				/* UUID */
 
+	/* 指向具体文件系统的私有信息，F2FS中为f2fs_sb_info */
 	void 			*s_fs_info;	/* Filesystem private info */
 	unsigned int		s_max_links;
 	fmode_t			s_mode;
@@ -1418,7 +1420,7 @@ struct super_block {
 
 	/* s_inode_list_lock protects s_inodes */
 	spinlock_t		s_inode_list_lock ____cacheline_aligned_in_smp;
-	struct list_head	s_inodes;	/* all inodes */
+	struct list_head	s_inodes;	/* all inodes 超级块中所有的inode*/
 };
 
 extern struct timespec current_fs_time(struct super_block *sb);

@@ -51,6 +51,10 @@ struct address_space;
 typedef void (bh_end_io_t)(struct buffer_head *bh, int uptodate);
 
 /*
+	块缓冲区首部
+	历史上，buffer_head用于映射页面中的单个块，当然也可以通过文件系统和块层作为I / O单元。 
+	现在基本I / O单元是bio，buffer_heads用于提取块映射（通过get_block_t调用），
+	用于跟踪页面内的状态（通过page_mapping）以及用于包装生物提交以实现向后兼容性（例如submit_bh）。
  * Historically, a buffer_head was used to map a single block
  * within a page, and of course as the unit of I/O through the
  * filesystem and block layers.  Nowadays the basic I/O unit
@@ -60,21 +64,21 @@ typedef void (bh_end_io_t)(struct buffer_head *bh, int uptodate);
  * for backward compatibility reasons (e.g. submit_bh).
  */
 struct buffer_head {
-	unsigned long b_state;		/* buffer state bitmap (see above) */
-	struct buffer_head *b_this_page;/* circular list of page's buffers */
-	struct page *b_page;		/* the page this bh is mapped to */
+	unsigned long b_state;		/* buffer state bitmap (see above) 缓冲区状态标志*/
+	struct buffer_head *b_this_page;/* circular list of page's buffers 指向下一个buffer_head*/
+	struct page *b_page;		/* the page this bh is mapped to、 buffer_head所在的page*/
 
-	sector_t b_blocknr;		/* start block number */
-	size_t b_size;			/* size of mapping */
-	char *b_data;			/* pointer to data within the page */
+	sector_t b_blocknr;		/* start block number 对应块设备的block的编号（逻辑块号、因为磁盘上一个block对应内存中的一个buffer_head）*/
+	size_t b_size;			/* size of mapping 、块大小*/
+	char *b_data;			/* pointer to data within the page 、块在缓冲区页内的位置*/
 
-	struct block_device *b_bdev;
-	bh_end_io_t *b_end_io;		/* I/O completion */
+	struct block_device *b_bdev;  /* buffer_head对应的块设备 */
+	bh_end_io_t *b_end_io;		/* I/O completion 、I/O完成方法*/
  	void *b_private;		/* reserved for b_end_io */
 	struct list_head b_assoc_buffers; /* associated with another mapping */
 	struct address_space *b_assoc_map;	/* mapping this buffer is
-						   associated with */
-	atomic_t b_count;		/* users using this buffer_head */
+						   associated with 、关联的页缓存*/
+	atomic_t b_count;		/* users using this buffer_head 、块使用计数器*/
 };
 
 /*
@@ -363,6 +367,9 @@ static inline struct buffer_head *getblk_unmovable(struct block_device *bdev,
 	return __getblk_gfp(bdev, block, size, 0);
 }
 
+/* 获取块设备对应的某一块，返回该块对应的bufffer_head,但是并不保证返回的buffer_head对应的数据是最新的
+	在文件系统读取超级块或管理块时特别有用
+*/
 static inline struct buffer_head *__getblk(struct block_device *bdev,
 					   sector_t block,
 					   unsigned size)
@@ -371,6 +378,7 @@ static inline struct buffer_head *__getblk(struct block_device *bdev,
 }
 
 /**
+	获取块设备对应的某一块，返回该块对应的bufffer_head,但是保证返回的buffer_head对应的数据是最新的
  *  __bread() - reads a specified block and returns the bh
  *  @bdev: the block_device to read from
  *  @block: number of block

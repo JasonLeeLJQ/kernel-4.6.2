@@ -730,6 +730,7 @@ out:
 }
 
 /*
+	申请一个新的inode
  * There are two policies for allocating an inode.  If the new inode is
  * a directory, then a forward search is made for a block group with both
  * free space and a low directory-to-inode ratio; if that fails, then of

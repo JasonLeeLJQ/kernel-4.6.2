@@ -2724,6 +2724,7 @@ int vfs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 	error = security_inode_create(dir, dentry, mode);
 	if (error)
 		return error;
+	/* 在某目录下创建一个inode */
 	error = dir->i_op->create(dir, dentry, mode, want_excl);
 	if (!error)
 		fsnotify_create(dir, dentry);
@@ -3366,10 +3367,14 @@ static struct file *path_openat(struct nameidata *nd,
 	int opened = 0;
 	int error;
 
+	
+	/* 创建struct *file并初始化，open过程中会把一个文件句柄与该file绑定，用户读写文件时会通过文件句柄找到该file进行一系列操作 */
+	//从file的slab缓冲区filp_cachep中分配一个file结构
 	file = get_empty_filp();
 	if (IS_ERR(file))
 		return file;
 
+	/* 将文件打开的标志位  赋给file结构的f_flags */
 	file->f_flags = op->open_flag;
 
 	if (unlikely(file->f_flags & __O_TMPFILE)) {
@@ -3377,11 +3382,27 @@ static struct file *path_openat(struct nameidata *nd,
 		goto out2;
 	}
 
+	/* 
+	作用:此时flags=0x41
+	1 初始化nameidata 包括文件名赋值给nd->last.name等;path_init中初始：nd->path=nd->root=current->fs->root
+	2 初始化nd->path.dentry为该superblock根目录 / 对应的目录项.此时nd->path.dentry->d_iname=/;
+	nd->path.dentry->d_inode->i_ino为根目录/对应的inode num; squashfs_fill_super中打印可以看到根目录的inode->i_ino;
+        该函数为下一步link_path_walk中查找文件所在目录文件的目录项做准备,
+	因为此时dentry初始化为根目录，所以从根目录开始查找文件所在目录.
+	实际上path_init中将nd->path,nd->root都初始化为current->fs->root,nd->root也是struct path结构,且当前进程的current->fs->root是根目录"/";
+	*/
 	s = path_init(nd, flags);
 	if (IS_ERR(s)) {
 		put_filp(file);
 		return ERR_CAST(s);
 	}
+
+	/*	link_path_walk
+	作用：找到文件所在目录的目录项。	
+	举例：open("/mnt/testdir/testfile",flags,mode);
+	此时nd->path.dentry->d_iname为/mnt/testdir;
+	即：dentry->d_iname=testdir;dentry->d_inode->i_ino=testdir对应的inode number.
+	*/
 	while (!(error = link_path_walk(s, nd)) &&
 		(error = do_last(nd, file, op, &opened)) > 0) {
 		nd->flags &= ~(LOOKUP_OPEN|LOOKUP_CREATE|LOOKUP_EXCL);
@@ -3417,6 +3438,8 @@ struct file *do_filp_open(int dfd, struct filename *pathname,
 	struct file *filp;
 
 	set_nameidata(&nd, dfd, pathname);
+
+	/* op中存放的是文件打开的标志位信息，非常重要 */
 	filp = path_openat(&nd, op, flags | LOOKUP_RCU);
 	if (unlikely(filp == ERR_PTR(-ECHILD)))
 		filp = path_openat(&nd, op, flags);

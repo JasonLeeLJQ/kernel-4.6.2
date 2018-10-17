@@ -233,6 +233,7 @@ struct page *pagecache_get_page(struct address_space *mapping, pgoff_t offset,
 		int fgp_flags, gfp_t cache_gfp_mask);
 
 /**
+	在页缓存中查找偏移地址为offset的page
  * find_get_page - find and get a page reference
  * @mapping: the address_space to search
  * @offset: the page index
@@ -638,6 +639,7 @@ extern void __delete_from_page_cache(struct page *page, void *shadow);
 int replace_page_cache_page(struct page *old, struct page *new, gfp_t gfp_mask);
 
 /*
+	将一个新page插入到页缓存（page_cache），page必须是locked状态
  * Like add_to_page_cache_locked, but used to add newly allocated pages:
  * the page is new, so we can just run __SetPageLocked() against it.
  */
@@ -646,6 +648,21 @@ static inline int add_to_page_cache(struct page *page,
 {
 	int error;
 
+	/*ADD*/
+	/* 在slab缓存中申请一个page_short结构 */
+	struct page_short *page_short = kmem_cache_alloc(page_short_cachep, GFP_KERNEL);
+	
+
+	page_short->refer_bit = false;
+	page_short->dirty_bit = false;
+	page_short->sugg_bit = false;
+	page_short->source_bit = false;
+	page_short->page = page;
+	//TODO 将page_short插入到clock链表中
+	/*此时要依据page的状态，判断要插入到哪一种类型的链表*/
+	list_add(&page_short->clock, &mapping->DF_head);
+	/*end ADD*/
+	
 	__SetPageLocked(page);
 	error = add_to_page_cache_locked(page, mapping, offset, gfp_mask);
 	if (unlikely(error))

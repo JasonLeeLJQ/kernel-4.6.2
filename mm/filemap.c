@@ -217,6 +217,7 @@ void __delete_from_page_cache(struct page *page, void *shadow)
 		}
 	}
 
+	/* 从radix tree中删除这个page */
 	page_cache_tree_delete(mapping, page, shadow);
 
 	page->mapping = NULL;
@@ -251,6 +252,9 @@ void __delete_from_page_cache(struct page *page, void *shadow)
 void delete_from_page_cache(struct page *page)
 {
 	struct address_space *mapping = page->mapping;
+	/*ADD*/
+	struct page_short *page_short;
+	/*end ADD*/
 	unsigned long flags;
 
 	void (*freepage)(struct page *);
@@ -259,7 +263,17 @@ void delete_from_page_cache(struct page *page)
 
 	freepage = mapping->a_ops->freepage;
 
+	/*ADD*/
+	/* 将page_short从四种CLOCK链表中删除，并且将page插入到历史队列中*/
+	page_short = container_of(&page, struct page_short, page);  //从page获得page_short结构体
+
+	list_del(&page_short.clock);  //从CLOCK链表中删除
+
+	//TODO:插入到历史队列中
+	/*end ADD*/
+
 	spin_lock_irqsave(&mapping->tree_lock, flags);
+	/* 从radix tree删除该page */
 	__delete_from_page_cache(page, NULL);
 	spin_unlock_irqrestore(&mapping->tree_lock, flags);
 
@@ -625,6 +639,7 @@ static int page_cache_tree_insert(struct address_space *mapping,
 	return 0;
 }
 
+/* 将page插入到page cache中 */
 static int __add_to_page_cache_locked(struct page *page,
 				      struct address_space *mapping,
 				      pgoff_t offset, gfp_t gfp_mask,
@@ -652,10 +667,14 @@ static int __add_to_page_cache_locked(struct page *page,
 	}
 
 	get_page(page);
+	/* 添加到page cache */
 	page->mapping = mapping;
 	page->index = offset;
 
+	/* 对radix tree加自旋锁 */
 	spin_lock_irq(&mapping->tree_lock);
+
+	/* 将page 插入到radix树中 */
 	error = page_cache_tree_insert(mapping, page, shadowp);
 	radix_tree_preload_end();
 	if (unlikely(error))
@@ -686,6 +705,9 @@ err_insert:
  * @offset:	page index
  * @gfp_mask:	page allocation mode
  *
+
+ 	page在插入page cache之前，必须是locked状态（手动设置）；
+ 	此函数不会将page插入到LRU链表中，必须手动添加。或者使用add_to_page_cache_lru函数。
  * This function is used to add a page to the pagecache. It must be locked.
  * This function does not add the page to the LRU.  The caller must do that.
  */
@@ -697,6 +719,7 @@ int add_to_page_cache_locked(struct page *page, struct address_space *mapping,
 }
 EXPORT_SYMBOL(add_to_page_cache_locked);
 
+/* 将page 加入到页缓存，并添加到LRU链表中 */
 int add_to_page_cache_lru(struct page *page, struct address_space *mapping,
 				pgoff_t offset, gfp_t gfp_mask)
 {
@@ -704,6 +727,7 @@ int add_to_page_cache_lru(struct page *page, struct address_space *mapping,
 	int ret;
 
 	__SetPageLocked(page);
+	/* 将page加入页缓存 */
 	ret = __add_to_page_cache_locked(page, mapping, offset,
 					 gfp_mask, &shadow);
 	if (unlikely(ret))
@@ -713,12 +737,16 @@ int add_to_page_cache_lru(struct page *page, struct address_space *mapping,
 		 * The page might have been evicted from cache only
 		 * recently, in which case it should be activated like
 		 * any other repeatedly accessed page.
+		 该页面可能最近才从缓存中逐出，在这种情况下，
+		 它应该像任何其他重复访问的页面一样被激活。
+		 从页缓存中驱逐的页面，先加入到换出页列表中。
 		 */
 		if (shadow && workingset_refault(shadow)) {
-			SetPageActive(page);
+			SetPageActive(page);  //设置页面为ACTIVE状态
 			workingset_activation(page);
 		} else
 			ClearPageActive(page);
+		/* 将page加入到zone->lruvec链表中 */
 		lru_cache_add(page);
 	}
 	return ret;
@@ -1131,6 +1159,8 @@ repeat:
 EXPORT_SYMBOL(find_lock_entry);
 
 /**
+	在页缓存中查找某页，并返回该页面。
+	如果不存在，且设置了FGP_CREAT标志，则申请一个页框，插入页缓存
  * pagecache_get_page - find and get a page reference
  * @mapping: the address_space to search
  * @offset: the page index
@@ -1159,6 +1189,7 @@ struct page *pagecache_get_page(struct address_space *mapping, pgoff_t offset,
 	struct page *page;
 
 repeat:
+	/* 查找radix tree */
 	page = find_get_entry(mapping, offset);
 	if (radix_tree_exceptional_entry(page))
 		page = NULL;
@@ -1188,6 +1219,7 @@ repeat:
 		mark_page_accessed(page);
 
 no_page:
+	/* 在页缓存中没有找到该页，并且如果设置了FGP_CREAT标志，则创建一个page，插入到页缓存；否则返回NULL */
 	if (!page && (fgp_flags & FGP_CREAT)) {
 		int err;
 		if ((fgp_flags & FGP_WRITE) && mapping_cap_account_dirty(mapping))
@@ -1429,6 +1461,8 @@ repeat:
 EXPORT_SYMBOL(find_get_pages_contig);
 
 /**
+  在页缓存中查找特定tag的页面，将页面放在pvec容器里，返回找到页面的个数 
+
  * find_get_pages_tag - find and return pages that match @tag
  * @mapping:	the address_space to search
  * @index:	the starting page index
@@ -1584,7 +1618,47 @@ static void shrink_readahead_size_eio(struct file *filp,
 	ra->ra_pages /= 4;
 }
 
+/*ADD*/
+/* 判断文件file的读写模式，如果是只读模式，返回false；其他情况返回true。 */
+bool file_flags(struct file *filp)
+{
+	if((filp->f_flags & O_WRONLY) || (filp->f_flags & O_RDWR))
+	{
+		return true;
+	}
+	else if(filp->f_flags & O_RDONLY){
+		return false;
+	}
+	else {
+		printk(KERN_EMERG "file未指定读写标志f_flags\n");
+	}
+}
+
+/* 增加__GFP_DRAM和__GFP_NVM标志位，添加到页缓存address_space中的flags中 
+		第一次申请：读操作申请NVM页面
+				写操作申请DRAM页面
+*/
+static void add_gfpmask_to_addressspace(struct address_space *mapping, int is_write)
+{
+	if(is_write) {
+		mapping->flags |= __GFP_DRAM;   //增加__GFP_DRAM标志，便于申请页框使用
+	}
+	else {
+		mapping->flags |= __GFP_NVM;
+	}
+}
+
+/* 从页缓存address_space的flags中，清除__GFP_DRAM、__GFP_NVM标志位 */
+static void remove_gfpmask_to_addressspace(struct address_space *mapping)
+{
+	mapping->flags &= ~(__GFP_DRAM | __GFP_NVM);
+}
+/*end ADD*/
+
 /**
+	从磁盘上读取请求的页面，然后将数据拷贝到用户空间缓冲区中。
+	注释也作了说明，该函数是通用文件读例程，真正执行读操作，
+	是通过mapping->a_ops->readpage（）来完成。
  * do_generic_file_read - generic file read routine
  * @filp:	the file to read
  * @ppos:	current file position
@@ -1602,7 +1676,7 @@ static ssize_t do_generic_file_read(struct file *filp, loff_t *ppos,
 {
 	struct address_space *mapping = filp->f_mapping;
 	struct inode *inode = mapping->host;
-	struct file_ra_state *ra = &filp->f_ra;
+	struct file_ra_state *ra = &filp->f_ra;  //获取文件预读的状态
 	pgoff_t index;
 	pgoff_t last_index;
 	pgoff_t prev_index;
@@ -1610,11 +1684,19 @@ static ssize_t do_generic_file_read(struct file *filp, loff_t *ppos,
 	unsigned int prev_offset;
 	int error = 0;
 
-	index = *ppos >> PAGE_SHIFT;
-	prev_index = ra->prev_pos >> PAGE_SHIFT;
+	index = *ppos >> PAGE_SHIFT;  //读取的数据起始位置index的页偏移
+	prev_index = ra->prev_pos >> PAGE_SHIFT;  
 	prev_offset = ra->prev_pos & (PAGE_SIZE-1);
-	last_index = (*ppos + iter->count + PAGE_SIZE-1) >> PAGE_SHIFT;
+	last_index = (*ppos + iter->count + PAGE_SIZE-1) >> PAGE_SHIFT;  //结束位置的页偏移
 	offset = *ppos & ~PAGE_MASK;
+
+	/*ADD*/
+	/*为address_space->flags增加标志位，便于申请页框
+	第一次申请：读操作申请NVM页面
+				写操作申请DRAM页面
+	*/
+	add_gfpmask_to_addressspace(mapping, 0);
+	/*end ADD*/
 
 	for (;;) {
 		struct page *page;
@@ -1624,20 +1706,31 @@ static ssize_t do_generic_file_read(struct file *filp, loff_t *ppos,
 
 		cond_resched();
 find_page:
+		//在页缓存中查找偏移地址为index的page
 		page = find_get_page(mapping, index);
 		if (!page) {
+			/* (同步)文件预读，读取若干页到页缓存 */
 			page_cache_sync_readahead(mapping,
 					ra, filp,
 					index, last_index - index);
-			page = find_get_page(mapping, index);
-			if (unlikely(page == NULL))
+			page = find_get_page(mapping, index);  //继续查找页缓存
+			if (unlikely(page == NULL))  //没有找到，那么说明所请求的数据确实不在cache中，就跳到no_cached_page
 				goto no_cached_page;
 		}
+		//判断它是否为readahead页
 		if (PageReadahead(page)) {
+			//如果是，则发起异步预读请求，并不等待读取完成
+			/* 这个函数在page有PG_readahead字段时才被调用，
+			意味着已经用光了足够的readahead window中的page，
+			我们需要添加更多的page到预读窗口。 */
 			page_cache_async_readahead(mapping,
 					ra, filp, page,
 					index, last_index - index);
 		}
+
+		/* update是否被置位。如果是，则说明数据是最新的，不需要从磁盘读数据
+			否则，就要执行下面操作从磁盘读最新数据。
+		*/
 		if (!PageUptodate(page)) {
 			/*
 			 * See comment in do_read_cache_page on why
@@ -1648,6 +1741,8 @@ find_page:
 			if (PageUptodate(page))
 				goto page_ok;
 
+			/* mapping->a_ops->is_partially_uptodate（）功能：
+			检查页缓存中的page是否都处于update状态 */
 			if (inode->i_blkbits == PAGE_SHIFT ||
 					!mapping->a_ops->is_partially_uptodate)
 				goto page_not_up_to_date;
@@ -1656,6 +1751,7 @@ find_page:
 			/* Did it get truncated before we got the lock? */
 			if (!page->mapping)
 				goto page_not_up_to_date_locked;
+			//若文件页面还没建立映射或者页缓存中的page不都是update状态
 			if (!mapping->a_ops->is_partially_uptodate(page,
 							offset, iter->count))
 				goto page_not_up_to_date_locked;
@@ -1678,7 +1774,8 @@ page_ok:
 			goto out;
 		}
 
-		/* nr is the maximum number of bytes to copy from this page */
+		/*nr是从此页面复制的最大字节数
+		nr is the maximum number of bytes to copy from this page */
 		nr = PAGE_SIZE;
 		if (index == end_index) {
 			nr = ((isize - 1) & ~PAGE_MASK) + 1;
@@ -1694,9 +1791,13 @@ page_ok:
 		 * before reading the page on the kernel side.
 		 */
 		if (mapping_writably_mapped(mapping))
-			flush_dcache_page(page);
+			flush_dcache_page(page);  //空
 
 		/*
+			调用make_page_accessed（）设置页面的PG_active和PG_referenced标志，
+			表示页面正在被使用且不能被调换（swap）出去。
+			若同样的页面被do_generic_file_read（）多次读，
+			这一步仅在第一次读时执行（即offset为0）。
 		 * When a sequential read accesses a page several times,
 		 * only mark it as accessed the first time.
 		 */
@@ -1705,6 +1806,7 @@ page_ok:
 		prev_index = index;
 
 		/*
+			将已读取到的数据拷贝到用户空间的缓冲区
 		 * Ok, we have the page, and it's up-to-date, so
 		 * now we can copy it to user space...
 		 */
@@ -1735,7 +1837,7 @@ page_not_up_to_date_locked:
 		/* Did it get truncated before we got the lock? */
 		if (!page->mapping) {
 			unlock_page(page);
-			put_page(page);
+			put_page(page);  //减少页的计数
 			continue;
 		}
 
@@ -1752,9 +1854,14 @@ readpage:
 		 * PG_error will be set again if readpage fails.
 		 */
 		ClearPageError(page);
-		/* Start the actual read. The read will unlock the page. */
+		/* Start the actual read. The read will unlock the page. 
+		真正执行从磁盘读数据的过程
+		*/
 		error = mapping->a_ops->readpage(filp, page);
 
+		/*mapping->a_ops->readpage（），如果读取失败，error返回值不为0，
+		再进一步判断error是AOP_TRUNCATED_PAGE时，则减少计数，跳到find_page，
+		如果不是此error，那么跳到readpage_error*/
 		if (unlikely(error)) {
 			if (error == AOP_TRUNCATED_PAGE) {
 				put_page(page);
@@ -1764,8 +1871,12 @@ readpage:
 			goto readpage_error;
 		}
 
+		/*若页面没有被设置PG_uptodate标志位，即页中的数据不是最新的，那么给页加锁，
+		如果加锁失败，则跳到readpage_error。加锁成功则再次判断他的PG_uptodate位，
+		如果仍然没有被置位，再判断page的mapping是不是为空，若为空，则解锁并且减少page计数，
+		然后跳到find_page。如果mapping不为空，则调整ra，并跳到readpage_error*/
 		if (!PageUptodate(page)) {
-			error = lock_page_killable(page);
+			error = lock_page_killable(page);  //加锁
 			if (unlikely(error))
 				goto readpage_error;
 			if (!PageUptodate(page)) {
@@ -1778,7 +1889,7 @@ readpage:
 					goto find_page;
 				}
 				unlock_page(page);
-				shrink_readahead_size_eio(filp, ra);
+				shrink_readahead_size_eio(filp, ra);  //调整预读参数ra
 				error = -EIO;
 				goto readpage_error;
 			}
@@ -1797,13 +1908,19 @@ no_cached_page:
 		 * Ok, it wasn't cached, so we need to create a new
 		 * page..
 		 */
-		page = page_cache_alloc_cold(mapping);
+		page = page_cache_alloc_cold(mapping);  //注意：这里调用了alloc_page函数
 		if (!page) {
 			error = -ENOMEM;
 			goto out;
 		}
+		//将申请的新page加入到页缓存中，并插入到zone->lruvec LRU链表中
 		error = add_to_page_cache_lru(page, mapping, index,
 				mapping_gfp_constraint(mapping, GFP_KERNEL));
+
+		/*
+			在此处：
+			将page转换成page_short，判断应该插入到何种链表，最后插入链表
+		*/
 		if (error) {
 			put_page(page);
 			if (error == -EEXIST) {
@@ -1820,12 +1937,18 @@ out:
 	ra->prev_pos <<= PAGE_SHIFT;
 	ra->prev_pos |= prev_offset;
 
-	*ppos = ((loff_t)index << PAGE_SHIFT) + offset;
-	file_accessed(filp);
+	/*ADD*/
+	/*从页缓存address_space的flags中，清除__GFP_DRAM、__GFP_NVM标志位*/
+	remove_gfpmask_to_addressspace(mapping);
+	/*end ADD*/
+
+	*ppos = ((loff_t)index << PAGE_SHIFT) + offset;  //更新当前文件读写位置
+	file_accessed(filp);   //更新文件inode节点中i_atime的时间为当前时间，且将inode标记为脏
 	return written ? written : error;
 }
 
 /**
+	通用的文件系统读过程
  * generic_file_read_iter - generic filesystem read routine
  * @iocb:	kernel I/O control block
  * @iter:	destination for the data read
@@ -1845,6 +1968,7 @@ generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 	if (!count)
 		goto out; /* skip atime */
 
+	/* 当执行direct IO读操作时，则进入直读模式，也就是跳过页缓存 */
 	if (iocb->ki_flags & IOCB_DIRECT) {
 		struct address_space *mapping = file->f_mapping;
 		struct inode *inode = mapping->host;
@@ -1855,6 +1979,7 @@ generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 					pos + count - 1);
 		if (!retval) {
 			struct iov_iter data = *iter;
+			/* address_space中的直接I/O操作 */
 			retval = mapping->a_ops->direct_IO(iocb, &data, pos);
 		}
 
@@ -1879,6 +2004,7 @@ generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 		}
 	}
 
+	/* 正常的读过程，经过页缓存 */
 	retval = do_generic_file_read(file, ppos, iter, retval);
 out:
 	return retval;
@@ -2568,6 +2694,12 @@ out:
 EXPORT_SYMBOL(generic_file_direct_write);
 
 /*
+	调用grab_cache_page_write_begin（）在pagecache中查找页面。
+	如果找到了该页，则增加计数并设置PG_locked标志。
+	如果该页不在页面Cache中，则分配一个新页，并调用add_to_page_cache_lru（），
+	将该页插入页面Cache中，这个函数也会增加页面引用计数，并设置PG_locked标志。
+	若grab_cache_page_write_begin（）没能成功返回页面，说明系统没有空闲内存了，
+	就没法继续写数据到硬盘，失败返回
  * Find or create a page at the given pagecache position. Return the locked
  * page. This function is specifically for buffered writes.
  */
@@ -2589,6 +2721,7 @@ struct page *grab_cache_page_write_begin(struct address_space *mapping,
 }
 EXPORT_SYMBOL(grab_cache_page_write_begin);
 
+//调用generic_perform_write（）函数完成在高速缓存里的写操作
 ssize_t generic_perform_write(struct file *file,
 				struct iov_iter *i, loff_t pos)
 {
@@ -2598,7 +2731,13 @@ ssize_t generic_perform_write(struct file *file,
 	ssize_t written = 0;
 	unsigned int flags = 0;
 
+	/*ADD*/
+	/*为address_space->flags增加标志位，便于申请页框*/
+	add_gfpmask_to_addressspace(mapping, 1);
+	/*end ADD*/
+
 	/*
+		若当前I/O操作是属于在内核中进行，显然是不能被中断的（用户态的I/O操作可以被中断），就要设置AOP_FLAG_UNINTERRUPTIBLE标志
 	 * Copies from kernel address space cannot fail (NFSD is a big user).
 	 */
 	if (!iter_is_iovec(i))
@@ -2606,9 +2745,9 @@ ssize_t generic_perform_write(struct file *file,
 
 	do {
 		struct page *page;
-		unsigned long offset;	/* Offset into pagecache page */
-		unsigned long bytes;	/* Bytes to write to page */
-		size_t copied;		/* Bytes copied from user */
+		unsigned long offset;	/* Offset into pagecache page 在页内的偏移量*/
+		unsigned long bytes;	/* Bytes to write to page 写入的字节数*/
+		size_t copied;		/* Bytes copied from user 要从用户空间拷贝的数据大小*/
 		void *fsdata;
 
 		offset = (pos & (PAGE_SIZE - 1));
@@ -2636,6 +2775,10 @@ again:
 			break;
 		}
 
+		/*调用底层文件系统的地址空间操作方法，准备从用户缓冲区开始写文件页块
+		write_begin方法会为该页分配和初始化缓冲区首部buffer_head
+		f2fs中：f2fs_write_begin
+		*/
 		status = a_ops->write_begin(file, mapping, pos, bytes, flags,
 						&page, &fsdata);
 		if (unlikely(status < 0))
@@ -2644,9 +2787,13 @@ again:
 		if (mapping_writably_mapped(mapping))
 			flush_dcache_page(page);
 
+		/* 用户写的文件数据在用户态，内核是不能直接使用用户地址空间进行数据传输的（访问用户态的地址，可能会产生页面中断），
+		因此在将数据写到硬盘前，先将待写的数据从用户态拷到内核里面的空间。
+		拷贝数据前，先关闭页面中断，拷贝完成后，使能页面中断，并标记页面被访 */
 		copied = iov_iter_copy_from_user_atomic(page, i, offset, bytes);
 		flush_dcache_page(page);
 
+		//调用底层文件系统的地址空间操作方法，从用户缓冲区写文件页块完成
 		status = a_ops->write_end(file, mapping, pos, bytes, copied,
 						page, fsdata);
 		if (unlikely(status < 0))
@@ -2675,6 +2822,11 @@ again:
 		balance_dirty_pages_ratelimited(mapping);
 	} while (iov_iter_count(i));
 
+	/*ADD*/
+	/*从页缓存address_space的flags中，清除__GFP_DRAM、__GFP_NVM标志位*/
+	remove_gfpmask_to_addressspace(mapping);
+	/*end ADD*/
+	
 	return written ? written : status;
 }
 EXPORT_SYMBOL(generic_perform_write);
@@ -2711,10 +2863,12 @@ ssize_t __generic_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (err)
 		goto out;
 
+	/* 更新inode中的文件访问时间 */
 	err = file_update_time(file);
 	if (err)
 		goto out;
 
+	/* Direct-I/O的方式，不经过页缓存 */
 	if (iocb->ki_flags & IOCB_DIRECT) {
 		loff_t pos, endbyte;
 
@@ -2729,6 +2883,7 @@ ssize_t __generic_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		if (written < 0 || !iov_iter_count(from) || IS_DAX(inode))
 			goto out;
 
+		 //调用generic_perform_write（）函数完成在高速缓存里的写操作
 		status = generic_perform_write(file, from, pos = iocb->ki_pos);
 		/*
 		 * If generic_perform_write() returned a synchronous error
@@ -2760,7 +2915,7 @@ ssize_t __generic_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 			 * the number of bytes which were direct-written
 			 */
 		}
-	} else {
+	} else {  //经过页缓存
 		written = generic_perform_write(file, from, iocb->ki_pos);
 		if (likely(written > 0))
 			iocb->ki_pos += written;
@@ -2772,6 +2927,8 @@ out:
 EXPORT_SYMBOL(__generic_file_write_iter);
 
 /**
+	通用的文件写过程（异步写）
+	旧版本函数是：generic_file_aio_write
  * generic_file_write_iter - write data to a file
  * @iocb:	IO state structure
  * @from:	iov_iter with data to write
@@ -2786,15 +2943,17 @@ ssize_t generic_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	struct inode *inode = file->f_mapping->host;
 	ssize_t ret;
 
-	inode_lock(inode);
+	inode_lock(inode);  //对索引节点信号量上锁
 	ret = generic_write_checks(iocb, from);
 	if (ret > 0)
+		//调用__generic_file_write_iter函数完成异步写操作的执行
 		ret = __generic_file_write_iter(iocb, from);
-	inode_unlock(inode);
+	inode_unlock(inode);  //解锁
 
 	if (ret > 0) {
 		ssize_t err;
 
+		//如果异步写成功，则执行写同步，同步到磁盘
 		err = generic_write_sync(file, iocb->ki_pos - ret, ret);
 		if (err < 0)
 			ret = err;
@@ -2804,6 +2963,7 @@ ssize_t generic_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 EXPORT_SYMBOL(generic_file_write_iter);
 
 /**
+	释放块设备缓冲区页
  * try_to_release_page() - release old fs-specific metadata on a page
  *
  * @page: the page which the kernel is trying to free

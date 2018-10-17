@@ -94,6 +94,8 @@ static void __recover_inline_status(struct inode *inode, struct page *ipage)
 	return;
 }
 
+/* 依据inode的节点号，将inode所在的磁盘block读到页缓存，此时磁盘上的f2fs_node节点就位于页缓存中。
+		使用f2fs_node 对inode初始化 */
 static int do_read_inode(struct inode *inode)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
@@ -109,12 +111,15 @@ static int do_read_inode(struct inode *inode)
 		return -EINVAL;
 	}
 
+	/* 依据inode节点号，将inode所在的磁盘block读到页缓存，返回页缓存中的page */
 	node_page = get_node_page(sbi, inode->i_ino);
 	if (IS_ERR(node_page))
 		return PTR_ERR(node_page);
 
+	/* 获取到page中的f2fs_inode结构（该结构本来是位于磁盘上的，后来被读到内存中） */
 	ri = F2FS_INODE(node_page);
 
+	/* 使用f2fs_inode的磁盘信息初始化inode和f2fs_inode_info */
 	inode->i_mode = le16_to_cpu(ri->i_mode);
 	i_uid_write(inode, le32_to_cpu(ri->i_uid));
 	i_gid_write(inode, le32_to_cpu(ri->i_gid));
@@ -162,43 +167,55 @@ static int do_read_inode(struct inode *inode)
 	return 0;
 }
 
+/* 
+	依据节点号ino，获得对应的inode；
+	若没有，则创建一个新的inode，读取磁盘上的inode所在的block，生成f2f2_inode对象去初始化这个新inode
+*/
 struct inode *f2fs_iget(struct super_block *sb, unsigned long ino)
 {
 	struct f2fs_sb_info *sbi = F2FS_SB(sb);
 	struct inode *inode;
 	int ret = 0;
 
+	//依据索引节点号ino，获得对应的inode；若没有，则创建一个新的inode
 	inode = iget_locked(sb, ino);
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
 
+	/* 该inode不是新inode，直接返回该inode */
 	if (!(inode->i_state & I_NEW)) {
 		trace_f2fs_iget(inode);
 		return inode;
 	}
+
+	/* 如果索引节点号是NODE节点或者META节点，调到make_now */
 	if (ino == F2FS_NODE_INO(sbi) || ino == F2FS_META_INO(sbi))
 		goto make_now;
 
+	/* 索引节点是DATA节点：依据inode的节点号，将inode对应的block读到页缓存，此时磁盘上的f2fs_node节点就位于页缓存中。
+		使用f2fs_node 对inode初始化 */
 	ret = do_read_inode(inode);
 	if (ret)
 		goto bad_inode;
 make_now:
-	if (ino == F2FS_NODE_INO(sbi)) {
+
+	/* 依据ino对应的节点类型或者文件类型，赋予inode不同的操作方法 */
+	if (ino == F2FS_NODE_INO(sbi)) {   //ino是NODE节点
 		inode->i_mapping->a_ops = &f2fs_node_aops;
 		mapping_set_gfp_mask(inode->i_mapping, GFP_F2FS_ZERO);
-	} else if (ino == F2FS_META_INO(sbi)) {
+	} else if (ino == F2FS_META_INO(sbi)) {  //ino是META节点
 		inode->i_mapping->a_ops = &f2fs_meta_aops;
 		mapping_set_gfp_mask(inode->i_mapping, GFP_F2FS_ZERO);
-	} else if (S_ISREG(inode->i_mode)) {
+	} else if (S_ISREG(inode->i_mode)) {    //inode代表普通文件
 		inode->i_op = &f2fs_file_inode_operations;
 		inode->i_fop = &f2fs_file_operations;
 		inode->i_mapping->a_ops = &f2fs_dblock_aops;
-	} else if (S_ISDIR(inode->i_mode)) {
+	} else if (S_ISDIR(inode->i_mode)) {   //inode代表目录文件
 		inode->i_op = &f2fs_dir_inode_operations;
 		inode->i_fop = &f2fs_dir_operations;
 		inode->i_mapping->a_ops = &f2fs_dblock_aops;
 		mapping_set_gfp_mask(inode->i_mapping, GFP_F2FS_HIGH_ZERO);
-	} else if (S_ISLNK(inode->i_mode)) {
+	} else if (S_ISLNK(inode->i_mode)) {   //inode代表符号链接
 		if (f2fs_encrypted_inode(inode))
 			inode->i_op = &f2fs_encrypted_symlink_inode_operations;
 		else
@@ -206,7 +223,7 @@ make_now:
 		inode_nohighmem(inode);
 		inode->i_mapping->a_ops = &f2fs_dblock_aops;
 	} else if (S_ISCHR(inode->i_mode) || S_ISBLK(inode->i_mode) ||
-			S_ISFIFO(inode->i_mode) || S_ISSOCK(inode->i_mode)) {
+			S_ISFIFO(inode->i_mode) || S_ISSOCK(inode->i_mode)) {  //inode代表字符设备、块设备、管道或者套接字文件
 		inode->i_op = &f2fs_special_inode_operations;
 		init_special_inode(inode, inode->i_mode, inode->i_rdev);
 	} else {

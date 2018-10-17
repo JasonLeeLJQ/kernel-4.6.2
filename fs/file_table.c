@@ -90,7 +90,9 @@ int proc_nr_files(struct ctl_table *table, int write,
 }
 #endif
 
-/* Find an unused file structure and return a pointer to it.
+/* 
+	从slab分配器寻找一个新的file结构，并返回
+	Find an unused file structure and return a pointer to it.
  * Returns an error pointer if some error happend e.g. we over file
  * structures limit, run out of memory or operation is not permitted.
  *
@@ -119,6 +121,7 @@ struct file *get_empty_filp(void)
 			goto over;
 	}
 
+	/* slab申请file结构 */
 	f = kmem_cache_zalloc(filp_cachep, GFP_KERNEL);
 	if (unlikely(!f))
 		return ERR_PTR(-ENOMEM);
@@ -261,6 +264,7 @@ void flush_delayed_fput(void)
 
 static DECLARE_DELAYED_WORK(delayed_fput_work, delayed_fput);
 
+/*递减文件对象引用计数*/
 void fput(struct file *file)
 {
 	if (atomic_long_dec_and_test(&file->f_count)) {

@@ -1042,6 +1042,7 @@ fail:
 }
 
 /*
+	提交bio请求，从磁盘读取inode对应的block，放到page中
  * Caller should do after getting the following values.
  * 0: f2fs_put_page(page, 0)
  * LOCKED_PAGE or error: f2fs_put_page(page, 1)
@@ -1050,6 +1051,8 @@ static int read_node_page(struct page *page, int rw)
 {
 	struct f2fs_sb_info *sbi = F2FS_P_SB(page);
 	struct node_info ni;
+
+	/* 构造bio所需的信息 */
 	struct f2fs_io_info fio = {
 		.sbi = sbi,
 		.type = NODE,
@@ -1058,6 +1061,7 @@ static int read_node_page(struct page *page, int rw)
 		.encrypted_page = NULL,
 	};
 
+	/* 获得node信息，存放在ni中 */
 	get_node_info(sbi, page->index, &ni);
 
 	if (unlikely(ni.blk_addr == NULL_ADDR)) {
@@ -1069,6 +1073,7 @@ static int read_node_page(struct page *page, int rw)
 		return LOCKED_PAGE;
 
 	fio.new_blkaddr = fio.old_blkaddr = ni.blk_addr;
+	/* 提交bio请求 */
 	return f2fs_submit_page_bio(&fio);
 }
 
@@ -1121,6 +1126,7 @@ static void ra_node_pages(struct page *parent, int start)
 	blk_finish_plug(&plug);
 }
 
+/* 依据inode节点号，将inode所在的磁盘block读到页缓存，返回页缓存中的page */
 static struct page *__get_node_page(struct f2fs_sb_info *sbi, pgoff_t nid,
 					struct page *parent, int start)
 {
@@ -1131,10 +1137,14 @@ static struct page *__get_node_page(struct f2fs_sb_info *sbi, pgoff_t nid,
 		return ERR_PTR(-ENOENT);
 	f2fs_bug_on(sbi, check_nid_range(sbi, nid));
 repeat:
+	/* 首先查找address_space中是否有inode索引号对应的page，如果没有则创建新的page*/
 	page = grab_cache_page(NODE_MAPPING(sbi), nid);
 	if (!page)
 		return ERR_PTR(-ENOMEM);
 
+	/* 提交bio请求，从磁盘读取inode对应的block，放到page中
+	   如果inode对应的block读取到page中了，直接返回该page
+	*/
 	err = read_node_page(page, READ_SYNC);
 	if (err < 0) {
 		f2fs_put_page(page, 1);
@@ -1161,6 +1171,7 @@ page_hit:
 	return page;
 }
 
+/* 依据inode节点号，将inode所在的磁盘block读到页缓存，返回页缓存中的page */
 struct page *get_node_page(struct f2fs_sb_info *sbi, pgoff_t nid)
 {
 	return __get_node_page(sbi, nid, NULL, 0);
@@ -1420,6 +1431,7 @@ static int f2fs_write_node_page(struct page *page,
 		down_read(&sbi->node_write);
 	}
 
+	/* 得到node_info */
 	get_node_info(sbi, nid, &ni);
 
 	/* This page is already truncated */
@@ -1432,13 +1444,17 @@ static int f2fs_write_node_page(struct page *page,
 	}
 
 	set_page_writeback(page);
-	fio.old_blkaddr = ni.blk_addr;
+	fio.old_blkaddr = ni.blk_addr;  //旧的block地址
+
+	/* 填充好fio结构，执行write node page */
 	write_node_page(nid, &fio);
+	/* 更改NAT */
 	set_node_addr(sbi, &ni, fio.new_blkaddr, is_fsync_dnode(page));
 	dec_page_count(sbi, F2FS_DIRTY_NODES);
 	up_read(&sbi->node_write);
 
 	if (wbc->for_reclaim)
+		/* 提交bio请求 */
 		f2fs_submit_merged_bio_cond(sbi, NULL, page, 0, NODE, WRITE);
 
 	unlock_page(page);
@@ -2023,6 +2039,8 @@ static void __flush_nat_entry_set(struct f2fs_sb_info *sbi,
 }
 
 /*
+	checkpoint过程中，将journal中的nat entry刷回磁盘；
+	其实，先将journal中的nat entry移动nat entry set中，最后从nat entry set中将
  * This function is called during the checkpointing process.
  */
 void flush_nat_entries(struct f2fs_sb_info *sbi)
@@ -2042,6 +2060,7 @@ void flush_nat_entries(struct f2fs_sb_info *sbi)
 	down_write(&nm_i->nat_tree_lock);
 
 	/*
+		如果journal中没有足够的空间存放dirty nat entry，则将这些entry合并放到nat entry set.
 	 * if there are no enough space in journal to store dirty nat
 	 * entries, remove all entries from journal and merge them
 	 * into nat entry set.
@@ -2058,7 +2077,9 @@ void flush_nat_entries(struct f2fs_sb_info *sbi)
 						MAX_NAT_JENTRIES(journal));
 	}
 
-	/* flush dirty nats in nat entry set */
+	/* flush dirty nats in nat entry set
+		将nat entry set中的dirty nat entry刷回
+	*/
 	list_for_each_entry_safe(set, tmp, &sets, set_list)
 		__flush_nat_entry_set(sbi, set);
 

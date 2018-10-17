@@ -644,6 +644,10 @@ static const struct {
 	{ "__GFP_RECLAIM",		"R" },
 	{ "__GFP_DIRECT_RECLAIM",	"DR" },
 	{ "__GFP_KSWAPD_RECLAIM",	"KR" },
+	/*ADD*/
+	{ "__GFP_DRAM",	"DRAM" },
+	{ "__GFP_NVM",	"NVM" },
+	/*end ADD*/
 	{ "__GFP_OTHER_NODE",		"ON" },
 };
 

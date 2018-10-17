@@ -648,8 +648,10 @@ void __init initmem_init(void)
 }
 #endif
 
+/* 初始化pglist_data/zone/page结构，并初始化伙伴系统 */
 void __init paging_init(void)
 {
+	printk(KERN_DEBUG "paging_init函数开始执行/n");
 	sparse_memory_present_with_active_regions(MAX_NUMNODES);
 	sparse_init();
 
@@ -663,6 +665,7 @@ void __init paging_init(void)
 	if (N_MEMORY != N_NORMAL_MEMORY)
 		node_clear_state(0, N_NORMAL_MEMORY);
 
+	/* 初始化 */
 	zone_sizes_init();
 }
 
@@ -1055,7 +1058,7 @@ static void __init register_page_bootmem_info(void)
 		register_page_bootmem_info_node(NODE_DATA(i));
 #endif
 }
-
+//初始化内核内存分配器，过渡到伙伴系统
 void __init mem_init(void)
 {
 	pci_iommu_alloc();
@@ -1064,7 +1067,9 @@ void __init mem_init(void)
 
 	register_page_bootmem_info();
 
-	/* this will put all memory onto the freelists */
+	/* this will put all memory onto the freelists 
+	将bootmem管理的所有页框释放到伙伴系统的freelists中
+	*/
 	free_all_bootmem();
 	after_bootmem = 1;
 
@@ -1072,6 +1077,7 @@ void __init mem_init(void)
 	kclist_add(&kcore_vsyscall, (void *)VSYSCALL_ADDR,
 			 PAGE_SIZE, KCORE_OTHER);
 
+	/* 打印内存信息 */
 	mem_init_print_info(NULL);
 }
 

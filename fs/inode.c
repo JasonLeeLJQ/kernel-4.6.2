@@ -119,10 +119,12 @@ static int no_open(struct inode *inode, struct file *file)
 }
 
 /**
+	 执行inode结构的初始化，包括inode->i_mapping（页缓存）的初始化
  * inode_init_always - perform inode structure intialisation
  * @sb: superblock inode belongs to
  * @inode: inode to initialise
- *
+ *	
+ *  初始化那些没有被slab分配器初始化的字段
  * These are initializations that need to be done on every inode
  * allocation as the fields are not initialised by slab allocation.
  */
@@ -130,7 +132,7 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 {
 	static const struct inode_operations empty_iops;
 	static const struct file_operations no_open_fops = {.open = no_open};
-	struct address_space *const mapping = &inode->i_data;
+	struct address_space *const mapping = &inode->i_data;   //page cache（页缓存）初始化
 
 	inode->i_sb = sb;
 	inode->i_blkbits = sb->s_blocksize_bits;
@@ -170,6 +172,7 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 
 	atomic_set(&inode->i_dio_count, 0);
 
+	/* 初始化页缓存的每一个字段（有些字段未初始化，置位0或NULL） */
 	mapping->a_ops = &empty_aops;
 	mapping->host = inode;
 	mapping->flags = 0;
@@ -177,6 +180,8 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	mapping_set_gfp_mask(mapping, GFP_HIGHUSER_MOVABLE);
 	mapping->private_data = NULL;
 	mapping->writeback_index = 0;
+
+
 	inode->i_private = NULL;
 	inode->i_mapping = mapping;
 	INIT_HLIST_HEAD(&inode->i_dentry);	/* buggered by rcu freeing */
@@ -200,14 +205,17 @@ static struct inode *alloc_inode(struct super_block *sb)
 {
 	struct inode *inode;
 
+	/* 如果提供了自己的分配函数，那么这个文件系统自己分配去~~~，具体不多说 */
 	if (sb->s_op->alloc_inode)
 		inode = sb->s_op->alloc_inode(sb);
 	else
+		/* 否则，直接从slab分配器中申请一个inode */
 		inode = kmem_cache_alloc(inode_cachep, GFP_KERNEL);
 
 	if (!inode)
 		return NULL;
 
+	/* 执行inode结构的初始化，包括inode->i_mapping（页缓存）的初始化 */
 	if (unlikely(inode_init_always(sb, inode))) {
 		if (inode->i_sb->s_op->destroy_inode)
 			inode->i_sb->s_op->destroy_inode(inode);
@@ -893,6 +901,7 @@ struct inode *new_inode_pseudo(struct super_block *sb)
 }
 
 /**
+	获得一个新的inode
  *	new_inode 	- obtain an inode
  *	@sb: superblock
  *
@@ -910,6 +919,7 @@ struct inode *new_inode(struct super_block *sb)
 
 	spin_lock_prefetch(&sb->s_inode_list_lock);
 
+	/* 此处调用了alloc_inode，真正的申请inode函数 */
 	inode = new_inode_pseudo(sb);
 	if (inode)
 		inode_sb_list_add(inode);
@@ -1012,6 +1022,7 @@ EXPORT_SYMBOL(unlock_two_nondirectories);
  * Note both @test and @set are called with the inode_hash_lock held, so can't
  * sleep.
  */
+ /* 从bdev文件系统中查找相关的inode，如果不存在，则分配一个新的inode和新的block_device； */
 struct inode *iget5_locked(struct super_block *sb, unsigned long hashval,
 		int (*test)(struct inode *, void *),
 		int (*set)(struct inode *, void *), void *data)
@@ -1020,21 +1031,27 @@ struct inode *iget5_locked(struct super_block *sb, unsigned long hashval,
 	struct inode *inode;
 
 	spin_lock(&inode_hash_lock);
+	/* 在inode cache中查找inode */
 	inode = find_inode(sb, head, test, data);
 	spin_unlock(&inode_hash_lock);
 
+	/* 找到直接返回该inode */
 	if (inode) {
 		wait_on_inode(inode);
 		return inode;
 	}
 
+	/* 找不到则申请新的inode */
 	inode = alloc_inode(sb);
 	if (inode) {
 		struct inode *old;
 
 		spin_lock(&inode_hash_lock);
-		/* We released the lock, so.. */
+		/* We released the lock, so.. 
+		再次尝试查找该inode（很大概率还是找不到）
+		*/
 		old = find_inode(sb, head, test, data);
+		//仍然找不到，则将申请到的新inode初始化，并把该inode插入到超级块的s_inodes链表中
 		if (!old) {
 			if (set(inode, data))
 				goto set_failed;
@@ -1043,7 +1060,7 @@ struct inode *iget5_locked(struct super_block *sb, unsigned long hashval,
 			inode->i_state = I_NEW;
 			hlist_add_head(&inode->i_hash, head);
 			spin_unlock(&inode->i_lock);
-			inode_sb_list_add(inode);
+			inode_sb_list_add(inode);  //将inode加入到超级块的list中
 			spin_unlock(&inode_hash_lock);
 
 			/* Return the locked inode with I_NEW set, the
@@ -1053,6 +1070,7 @@ struct inode *iget5_locked(struct super_block *sb, unsigned long hashval,
 		}
 
 		/*
+			有个进程此时创建了相同的inode，使用这个inode代替我们刚才申请的inode
 		 * Uhhuh, somebody else created the same inode under
 		 * us. Use the old inode instead of the one we just
 		 * allocated.
@@ -1072,6 +1090,7 @@ set_failed:
 EXPORT_SYMBOL(iget5_locked);
 
 /**
+	依据ino节点号，得到对应的inode；如果没有，则创建新的inode，并将该inode节点号置为ino
  * iget_locked - obtain an inode from a mounted file system
  * @sb:		super block of file system
  * @ino:	inode number to get
@@ -1086,31 +1105,40 @@ EXPORT_SYMBOL(iget5_locked);
  */
 struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 {
-	struct hlist_head *head = inode_hashtable + hash(sb, ino);
+	struct hlist_head *head = inode_hashtable + hash(sb, ino);  //找到对应的哈希桶
 	struct inode *inode;
 
 	spin_lock(&inode_hash_lock);
+	/* 使用哈希方法快速查找inode */
 	inode = find_inode_fast(sb, head, ino);
 	spin_unlock(&inode_hash_lock);
+
+	/* 找到该inode就返回该inode */
 	if (inode) {
 		wait_on_inode(inode);
 		return inode;
 	}
 
+	/* 未找到，申请新的inode 
+	f2fs特定的alloc_inode方法：f2fs_alloc_inode
+	*/
 	inode = alloc_inode(sb);
 	if (inode) {
 		struct inode *old;
 
 		spin_lock(&inode_hash_lock);
-		/* We released the lock, so.. */
+		/* We released the lock, so.. 
+		再次尝试查找节点号为ino的inode（很大概率还是找不到）
+		*/
 		old = find_inode_fast(sb, head, ino);
+		//仍然找不到，则将申请到的新inode的节点号设置为ino，并把该inode插入到inode->i_sb_list链表中
 		if (!old) {
-			inode->i_ino = ino;
+			inode->i_ino = ino;  //将申请到的新inode的节点号设置为ino
 			spin_lock(&inode->i_lock);
 			inode->i_state = I_NEW;
-			hlist_add_head(&inode->i_hash, head);
+			hlist_add_head(&inode->i_hash, head); //将inode插入到全局的inode_hashtable中
 			spin_unlock(&inode->i_lock);
-			inode_sb_list_add(inode);
+			inode_sb_list_add(inode);   //把该inode插入到超级块的inode->i_sb_list链表中
 			spin_unlock(&inode_hash_lock);
 
 			/* Return the locked inode with I_NEW set, the
@@ -1120,6 +1148,7 @@ struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 		}
 
 		/*
+			有个进程此时创建了相同的inode，使用这个inode代替我们刚才申请的inode
 		 * Uhhuh, somebody else created the same inode under
 		 * us. Use the old inode instead of the one we just
 		 * allocated.
@@ -1911,18 +1940,21 @@ void __init inode_init(void)
 		INIT_HLIST_HEAD(&inode_hashtable[loop]);
 }
 
+/* 为块设备文件或字符文件初始化一个inode，inode已经实现申请了 
+	根据设备类型，向inode提供不同的文件操作
+*/
 void init_special_inode(struct inode *inode, umode_t mode, dev_t rdev)
 {
 	inode->i_mode = mode;
-	if (S_ISCHR(mode)) {
+	if (S_ISCHR(mode)) {  //字符设备
 		inode->i_fop = &def_chr_fops;
 		inode->i_rdev = rdev;
-	} else if (S_ISBLK(mode)) {
+	} else if (S_ISBLK(mode)) {  //块设备
 		inode->i_fop = &def_blk_fops;
 		inode->i_rdev = rdev;
-	} else if (S_ISFIFO(mode))
+	} else if (S_ISFIFO(mode))  //管道
 		inode->i_fop = &pipefifo_fops;
-	else if (S_ISSOCK(mode))
+	else if (S_ISSOCK(mode))    //套接字
 		;	/* leave it no_open_fops */
 	else
 		printk(KERN_DEBUG "init_special_inode: bogus i_mode (%o) for"

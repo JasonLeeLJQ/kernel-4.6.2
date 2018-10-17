@@ -64,6 +64,8 @@ static struct page *__get_meta_page(struct f2fs_sb_info *sbi, pgoff_t index,
 	if (unlikely(!is_meta))
 		fio.rw &= ~REQ_META;
 repeat:
+	/* grab_cache_page去获取特定位置的页，grab_cache_page首先会查找address_space的基数树，
+	如果找到该页则返回，如果找不到，则从伙伴系统分配一个新的页 */
 	page = grab_cache_page(mapping, index);
 	if (!page) {
 		cond_resched();
@@ -615,6 +617,11 @@ static void write_orphan_inodes(struct f2fs_sb_info *sbi, block_t start_blk)
 	}
 }
 
+/*  验证该CP区域是否有效；
+是否有效的标准：该segment的第一个block和最后一个block的版本号应该相同；
+如果不同，说明在写checkpoint的时候，发生了错误。这个CP区域是无效的。
+	CP pack指的是一整个CP segment
+*/
 static struct page *validate_checkpoint(struct f2fs_sb_info *sbi,
 				block_t cp_addr, unsigned long long *version)
 {
@@ -625,10 +632,14 @@ static struct page *validate_checkpoint(struct f2fs_sb_info *sbi,
 	size_t crc_offset;
 	__u32 crc = 0;
 
-	/* Read the 1st cp block in this CP pack */
+	/* Read the 1st cp block in this CP pack，该pack就是一整个segment
+		获得CP区域的第一个block（也就是page），该page在sbi->meta_inode->i_mapping的页缓存中查找；
+		如果不在页缓存，则执行预读操作，将若干页读到页缓存中。
+	*/
 	cp_page_1 = get_meta_page(sbi, cp_addr);
 
 	/* get the version number */
+	//cp_page_1由物理地址转成逻辑地址，并转换成f2fs_checkpoint指针
 	cp_block = (struct f2fs_checkpoint *)page_address(cp_page_1);
 	crc_offset = le32_to_cpu(cp_block->checksum_offset);
 	if (crc_offset >= blk_size)
@@ -638,10 +649,13 @@ static struct page *validate_checkpoint(struct f2fs_sb_info *sbi,
 	if (!f2fs_crc_valid(sbi, crc, cp_block, crc_offset))
 		goto invalid_cp1;
 
+	/* 获得第一个CP block的版本号 */
 	pre_version = cur_cp_version(cp_block);
 
-	/* Read the 2nd cp block in this CP pack */
-	cp_addr += le32_to_cpu(cp_block->cp_pack_total_block_count) - 1;
+	/* Read the 2nd cp block in this CP pack 
+		读取CP pack中的第二个CP block（这个block位于CP segment中的最后一个block）
+	*/
+	cp_addr += le32_to_cpu(cp_block->cp_pack_total_block_count) - 1; //获得第二个CP block的地址
 	cp_page_2 = get_meta_page(sbi, cp_addr);
 
 	cp_block = (struct f2fs_checkpoint *)page_address(cp_page_2);
@@ -653,8 +667,10 @@ static struct page *validate_checkpoint(struct f2fs_sb_info *sbi,
 	if (!f2fs_crc_valid(sbi, crc, cp_block, crc_offset))
 		goto invalid_cp2;
 
+	/* 获得第二个CP block的版本号 */
 	cur_version = cur_cp_version(cp_block);
 
+	/* 只有两个block中的版本号相同，才证明该CP区域是有效的 */
 	if (cur_version == pre_version) {
 		*version = cur_version;
 		f2fs_put_page(cp_page_2, 1);
@@ -667,6 +683,9 @@ invalid_cp1:
 	return NULL;
 }
 
+/* 得到一个有效的CP区域 
+Checkpoint 包含一个版本号，因而当文件系统挂载的时候，两个Checkpoint 都被读取，但是使用的是仅有较高的版本号的Checkpoint 作为有效使用的Checkpoint。
+*/
 int get_valid_checkpoint(struct f2fs_sb_info *sbi)
 {
 	struct f2fs_checkpoint *cp_block;
@@ -683,20 +702,26 @@ int get_valid_checkpoint(struct f2fs_sb_info *sbi)
 	if (!sbi->ckpt)
 		return -ENOMEM;
 	/*
+		寻找有效的CP块（读取磁盘上的两个CP块）
+		Checkpoint 包含一个版本号，因而当文件系统挂载的时候，两个Checkpoint 都被读取，但是使用的是仅有较高的版本号的Checkpoint 作为有效使用的Checkpoint。
 	 * Finding out valid cp block involves read both
 	 * sets( cp pack1 and cp pack 2)
 	 */
-	cp_start_blk_no = le32_to_cpu(fsb->cp_blkaddr);
+	cp_start_blk_no = le32_to_cpu(fsb->cp_blkaddr);  //CP的起始块地址
+	/* 得到该CP区域的版本号和CP1 */
 	cp1 = validate_checkpoint(sbi, cp_start_blk_no, &cp1_version);
 
-	/* The second checkpoint pack should start at the next segment */
+	/* The second checkpoint pack should start at the next segment 
+	下一个CP区域应该位于下一个segment的起始位置
+	*/
 	cp_start_blk_no += ((unsigned long long)1) <<
-				le32_to_cpu(fsb->log_blocks_per_seg);
+				le32_to_cpu(fsb->log_blocks_per_seg);  //获取到下一个CP区域
 	cp2 = validate_checkpoint(sbi, cp_start_blk_no, &cp2_version);
 
+	//版本号最大的CP区域是有效CP区域
 	if (cp1 && cp2) {
 		if (ver_after(cp2_version, cp1_version))
-			cur_page = cp2;
+			cur_page = cp2;  
 		else
 			cur_page = cp1;
 	} else if (cp1) {
@@ -858,6 +883,7 @@ retry:
 }
 
 /*
+	在checkpoint时，冻结所有的FS操作
  * Freeze all the FS-operations for checkpoint.
  */
 static int block_operations(struct f2fs_sb_info *sbi)
@@ -873,6 +899,7 @@ static int block_operations(struct f2fs_sb_info *sbi)
 	blk_start_plug(&plug);
 
 retry_flush_dents:
+	/* 阻塞对整个文件系统的操作,申请一个信号量cp->rwsem */
 	f2fs_lock_all(sbi);
 	/* write all the dirty dentry pages */
 	if (get_pages(sbi, F2FS_DIRTY_DENTS)) {
@@ -1110,6 +1137,8 @@ static int do_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 }
 
 /*
+	写checkpoint过程。
+	写回data block和node block，并将f2fs_journal中的nat_entry和sit_entry写回NAT和SIT区域
  * We guarantee that this checkpoint procedure will not fail.
  */
 int write_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
@@ -1135,6 +1164,7 @@ int write_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 
 	trace_f2fs_write_checkpoint(sbi->sb, cpc->reason, "start block_ops");
 
+	/* 在CP过程中，冻住FS所有操作 */
 	err = block_operations(sbi);
 	if (err)
 		goto out;

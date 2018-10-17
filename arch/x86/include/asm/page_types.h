@@ -4,6 +4,14 @@
 #include <linux/const.h>
 #include <linux/types.h>
 
+/*ADD*/
+#ifndef MEM_BORDER
+/*物理内存的边界，之前为DRAM页面，之后为NVM页面*/
+#define MEM_BORDER      0x04000000   
+#endif  /* MEM_BORDER */
+/*end ADD*/
+
+
 /* PAGE_SHIFT determines the page size */
 #define PAGE_SHIFT		12
 #define PAGE_SIZE		(_AC(1,UL) << PAGE_SHIFT)

@@ -18,22 +18,23 @@ typedef void (bio_end_io_t) (struct bio *);
 typedef void (bio_destructor_t) (struct bio *);
 
 /*
+	bio段就是描述所要读或写的数据在内存中位置
  * was unsigned short, but we might as well be ready for > 64kB I/O pages
  */
 struct bio_vec {
-	struct page	*bv_page;
-	unsigned int	bv_len;
-	unsigned int	bv_offset;
+	struct page	*bv_page;  //段所在的内存页（段大小 <= 页大小）
+	unsigned int	bv_len;  //段的字节长度
+	unsigned int	bv_offset;   //页框中数据的偏移量
 };
 
 #ifdef CONFIG_BLOCK
 
 struct bvec_iter {
 	sector_t		bi_sector;	/* device address in 512 byte
-						   sectors */
-	unsigned int		bi_size;	/* residual I/O count */
+						   sectors  块I/O操作的第一个磁盘扇区*/
+	unsigned int		bi_size;	/* residual I/O count 需要进行I/O传送的字节数*/
 
-	unsigned int		bi_idx;		/* current index into bvl_vec */
+	unsigned int		bi_idx;		/* current index into bvl_vec； bio_vec数组中段的当前索引值（指向数组中第几个段）*/
 
 	unsigned int            bi_bvec_done;	/* number of bytes completed in
 						   current bvec */
@@ -44,11 +45,11 @@ struct bvec_iter {
  * stacking drivers)
  */
 struct bio {
-	struct bio		*bi_next;	/* request queue link */
-	struct block_device	*bi_bdev;
-	unsigned int		bi_flags;	/* status, command, etc */
+	struct bio		*bi_next;	/* request queue link 链接到请求队列中的下一个bio*/
+	struct block_device	*bi_bdev;  /* 指向块设备描述符的指针 */
+	unsigned int		bi_flags;	/* status, command, etc bio的状态标志*/
 	int			bi_error;
-	unsigned long		bi_rw;		/* bottom bits READ/WRITE,
+	unsigned long		bi_rw;		/* bottom bits READ/WRITE, I/O操作标志（低位是读写位，高位是优先级）
 						 * top bits priority
 						 */
 
@@ -57,20 +58,20 @@ struct bio {
 	/* Number of segments in this BIO after
 	 * physical address coalescing is performed.
 	 */
-	unsigned int		bi_phys_segments;
+	unsigned int		bi_phys_segments;  //合并之后bio中物理段的数目
 
 	/*
 	 * To keep track of the max segment size, we account for the
 	 * sizes of the first and last mergeable segments in this bio.
 	 */
-	unsigned int		bi_seg_front_size;
+	unsigned int		bi_seg_front_size;  
 	unsigned int		bi_seg_back_size;
 
 	atomic_t		__bi_remaining;
 
-	bio_end_io_t		*bi_end_io;
+	bio_end_io_t		*bi_end_io;  //bio的I/O操作结束时调用的方法
 
-	void			*bi_private;
+	void			*bi_private;  //通用块层和块设备驱动程序的I/O完成方法使用的指针
 #ifdef CONFIG_BLK_CGROUP
 	/*
 	 * Optional ioc and css associated with this bio.  Put on bio
@@ -85,26 +86,28 @@ struct bio {
 #endif
 	};
 
-	unsigned short		bi_vcnt;	/* how many bio_vec's */
+	unsigned short		bi_vcnt;	/* how many bio_vec's 、bi_io_vec数组项的个数*/
 
 	/*
 	 * Everything starting with bi_max_vecs will be preserved by bio_reset()
 	 */
 
-	unsigned short		bi_max_vecs;	/* max bvl_vecs we can hold */
+	unsigned short		bi_max_vecs;	/* max bvl_vecs we can hold bio_vec数组中允许的最大段数*/
 
 	atomic_t		__bi_cnt;	/* pin count */
 
-	struct bio_vec		*bi_io_vec;	/* the actual vec list */
+	struct bio_vec		*bi_io_vec;	/* the actual vec list 存放段的数组*/
 
-	struct bio_set		*bi_pool;
+	struct bio_set		*bi_pool; //备用的bio内存池
 
 	/*
+		为了避免重复申请少量的bio_vec，使用内联一定数量的bio_vec数组，将它放在bio结构的尾部。
 	 * We can inline a number of vecs at the end of the bio, to avoid
 	 * double allocations for a small number of bio_vecs. This member
 	 * MUST obviously be kept at the very end of the bio.
 	 */
-	struct bio_vec		bi_inline_vecs[0];
+	struct bio_vec		bi_inline_vecs[0]; /*一般一个bio就一个段，bi_inline_vecs就
+    可满足，省去了再为bi_io_vec分配空间*/
 };
 
 #define BIO_RESET_BYTES		offsetof(struct bio, bi_max_vecs)

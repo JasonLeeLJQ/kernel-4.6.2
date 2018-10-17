@@ -3,7 +3,7 @@
  * first and the left over flags will end up showing by themselves.
  *
  * For example, if we have GFP_KERNEL before GFP_USER we wil get:
- *
+ * 顺序是很重要的，最前面的优先级高，会覆盖优先级低的
  *  GFP_KERNEL|GFP_HARDWALL
  *
  * Thus most bits set go first.
@@ -47,6 +47,8 @@
 	{(unsigned long)__GFP_RECLAIM,		"__GFP_RECLAIM"},	\
 	{(unsigned long)__GFP_DIRECT_RECLAIM,	"__GFP_DIRECT_RECLAIM"},\
 	{(unsigned long)__GFP_KSWAPD_RECLAIM,	"__GFP_KSWAPD_RECLAIM"},\
+	{(unsigned long)__GFP_DRAM,	"__GFP_DRAM"},\
+	{(unsigned long)__GFP_NVM,	"__GFP_NVM"},\
 	{(unsigned long)__GFP_OTHER_NODE,	"__GFP_OTHER_NODE"}	\
 
 #define show_gfp_flags(flags)						\
