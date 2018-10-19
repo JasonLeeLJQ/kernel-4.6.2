@@ -2585,6 +2585,7 @@ void destroy_segment_manager(struct f2fs_sb_info *sbi)
 	kfree(sm_info);
 }
 
+/* 为discard_entry、sit_entry_set、inmem_pages申请slab缓存 */
 int __init create_segment_manager_caches(void)
 {
 	discard_entry_slab = f2fs_kmem_cache_create("discard_entry",

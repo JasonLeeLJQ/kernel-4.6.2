@@ -1061,7 +1061,7 @@ static int read_node_page(struct page *page, int rw)
 		.encrypted_page = NULL,
 	};
 
-	/* 获得node信息，存放在ni中 */
+	/* 读取NAT表，获得node信息，存放在ni中（ni中存放着node对应的block地址，node id） */
 	get_node_info(sbi, page->index, &ni);
 
 	if (unlikely(ni.blk_addr == NULL_ADDR)) {
@@ -1126,7 +1126,7 @@ static void ra_node_pages(struct page *parent, int start)
 	blk_finish_plug(&plug);
 }
 
-/* 依据inode节点号，将inode所在的磁盘block读到页缓存，返回页缓存中的page */
+/* 依据inode节点号，首先查询页缓存，未找到则将inode所在的磁盘block读到页缓存，返回页缓存中的page */
 static struct page *__get_node_page(struct f2fs_sb_info *sbi, pgoff_t nid,
 					struct page *parent, int start)
 {
@@ -2208,6 +2208,7 @@ void destroy_node_manager(struct f2fs_sb_info *sbi)
 	kfree(nm_i);
 }
 
+/* 为nat_entry、free_nid、nat_entry_set申请slab缓存 */
 int __init create_node_manager_caches(void)
 {
 	nat_entry_slab = f2fs_kmem_cache_create("nat_entry",

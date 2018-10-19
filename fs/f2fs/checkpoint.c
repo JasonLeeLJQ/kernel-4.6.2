@@ -708,7 +708,7 @@ int get_valid_checkpoint(struct f2fs_sb_info *sbi)
 	 * sets( cp pack1 and cp pack 2)
 	 */
 	cp_start_blk_no = le32_to_cpu(fsb->cp_blkaddr);  //CP的起始块地址
-	/* 得到该CP区域的版本号和CP1 */
+	/* 验证该checkpoint区域是否有效，有效则返回得到该CP区域的版本号和CP1，否则返回NULL */
 	cp1 = validate_checkpoint(sbi, cp_start_blk_no, &cp1_version);
 
 	/* The second checkpoint pack should start at the next segment 
@@ -1221,6 +1221,7 @@ void init_ino_entry_info(struct f2fs_sb_info *sbi)
 				F2FS_ORPHANS_PER_BLOCK;
 }
 
+/* 为ino_entry、inode_entry申请slab缓存 */
 int __init create_checkpoint_caches(void)
 {
 	ino_entry_slab = f2fs_kmem_cache_create("f2fs_ino_entry",

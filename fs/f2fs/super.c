@@ -285,6 +285,7 @@ void f2fs_msg(struct super_block *sb, const char *level, const char *fmt, ...)
 	va_end(args);
 }
 
+/* 初始化f2fs_inode_info->vfs_inode的部分字段（），即初始化VFS的inode结构 */
 static void init_once(void *foo)
 {
 	struct f2fs_inode_info *fi = (struct f2fs_inode_info *) foo;
@@ -292,6 +293,7 @@ static void init_once(void *foo)
 	inode_init_once(&fi->vfs_inode);
 }
 
+/* 解析挂载参数data */
 static int parse_options(struct super_block *sb, char *options)
 {
 	struct f2fs_sb_info *sbi = F2FS_SB(sb);
@@ -303,6 +305,7 @@ static int parse_options(struct super_block *sb, char *options)
 	if (!options)
 		return 0;
 
+	/* 将参数options拆成若干个参数p，对每个参数进行解析 */
 	while ((p = strsep(&options, ",")) != NULL) {
 		int token;
 		if (!*p)
@@ -312,6 +315,7 @@ static int parse_options(struct super_block *sb, char *options)
 		 * found; some options take optional arguments.
 		 */
 		args[0].to = args[0].from = NULL;
+		/* f2fs_tokens是一个挂载参数字典，查询参数p是否与字典匹配 */
 		token = match_token(p, f2fs_tokens, args);
 
 		switch (token) {
@@ -518,6 +522,7 @@ static int f2fs_drop_inode(struct inode *inode)
 }
 
 /*
+	标记inode结构为脏
  * f2fs_dirty_inode() is called from __mark_inode_dirty()
  *
  * We should call set_dirty_inode to write the dirty inode through write_inode.
@@ -538,6 +543,9 @@ static void f2fs_destroy_inode(struct inode *inode)
 	call_rcu(&inode->i_rcu, f2fs_i_callback);
 }
 
+/* 更新磁盘上的superblock，并移除内存中的f2fs_sb_info结构
+	该函数在卸载文件系统时调用
+*/
 static void f2fs_put_super(struct super_block *sb)
 {
 	struct f2fs_sb_info *sbi = F2FS_SB(sb);
@@ -548,6 +556,7 @@ static void f2fs_put_super(struct super_block *sb)
 	}
 	kobject_del(&sbi->s_kobj);
 
+	/* 停止GC线程 */
 	stop_gc_thread(sbi);
 
 	/* prevent remaining shrinker jobs */
@@ -558,6 +567,7 @@ static void f2fs_put_super(struct super_block *sb)
 	 * But, the previous checkpoint was not done by umount, it needs to do
 	 * clean checkpoint again.
 	 */
+	 /* f2fs_sb_info设置了脏标志位且f2fs_checkpoint没有设置卸载标志，则执行写Checkpoint操作 */
 	if (is_sbi_flag_set(sbi, SBI_IS_DIRTY) ||
 			!is_set_ckpt_flags(F2FS_CKPT(sbi), CP_UMOUNT_FLAG)) {
 		struct cp_control cpc = {
@@ -566,6 +576,7 @@ static void f2fs_put_super(struct super_block *sb)
 		write_checkpoint(sbi, &cpc);
 	}
 
+	/* 下面的步骤：释放f2fs_sb_info的其他字段包含的结构 */
 	/* write_checkpoint can update stat informaion */
 	f2fs_destroy_stats(sbi);
 
@@ -583,10 +594,13 @@ static void f2fs_put_super(struct super_block *sb)
 	if (get_pages(sbi, F2FS_WRITEBACK))
 		f2fs_flush_merged_bios(sbi);
 
+	/* 释放超级块中的node_inode和meta_inode */
 	iput(sbi->node_inode);
 	iput(sbi->meta_inode);
 
-	/* destroy f2fs internal modules */
+	/* destroy f2fs internal modules 
+		释放超级块中f2fs_nm_info和f2fs_sm_info结构
+	*/
 	destroy_node_manager(sbi);
 	destroy_segment_manager(sbi);
 
@@ -601,6 +615,7 @@ static void f2fs_put_super(struct super_block *sb)
 	kfree(sbi);
 }
 
+/* 同步文件系统，将脏node、page等同步到磁盘（实际上执行checkpoint） */
 int f2fs_sync_fs(struct super_block *sb, int sync)
 {
 	struct f2fs_sb_info *sbi = F2FS_SB(sb);
@@ -614,6 +629,7 @@ int f2fs_sync_fs(struct super_block *sb, int sync)
 		cpc.reason = __get_cp_reason(sbi);
 
 		mutex_lock(&sbi->gc_mutex);
+		/* 执行checkpoint */
 		err = write_checkpoint(sbi, &cpc);
 		mutex_unlock(&sbi->gc_mutex);
 	}
@@ -622,6 +638,7 @@ int f2fs_sync_fs(struct super_block *sb, int sync)
 	return err;
 }
 
+/* 冻结文件系统 */
 static int f2fs_freeze(struct super_block *sb)
 {
 	int err;
@@ -638,6 +655,7 @@ static int f2fs_unfreeze(struct super_block *sb)
 	return 0;
 }
 
+/*F2FS文件系统的统计信息*/
 static int f2fs_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
 	struct super_block *sb = dentry->d_sb;
@@ -875,20 +893,21 @@ restore_opts:
 	return err;
 }
 
+/* F2FS超级块的操作 */
 static struct super_operations f2fs_sops = {
 	.alloc_inode	= f2fs_alloc_inode,
 	.drop_inode	= f2fs_drop_inode,
-	.destroy_inode	= f2fs_destroy_inode,
+	.destroy_inode	= f2fs_destroy_inode,  /* 撤销（删除）inode对象 */
 	.write_inode	= f2fs_write_inode,
-	.dirty_inode	= f2fs_dirty_inode,
+	.dirty_inode	= f2fs_dirty_inode,  /* 标记inode结构为脏 */
 	.show_options	= f2fs_show_options,
 	.evict_inode	= f2fs_evict_inode,
-	.put_super	= f2fs_put_super,
-	.sync_fs	= f2fs_sync_fs,
-	.freeze_fs	= f2fs_freeze,
+	.put_super	= f2fs_put_super,   /* 移除内存中的f2fs_sb_info结构，该函数在卸载文件系统时调用 */
+	.sync_fs	= f2fs_sync_fs,     /* 同步文件系统，将脏node、page等同步到磁盘 */
+	.freeze_fs	= f2fs_freeze,      /* 冻结文件系统 */
 	.unfreeze_fs	= f2fs_unfreeze,
-	.statfs		= f2fs_statfs,
-	.remount_fs	= f2fs_remount,
+	.statfs		= f2fs_statfs,    /* F2FS文件系统的统计信息 */
+	.remount_fs	= f2fs_remount,   /* 重新挂载F2FS */
 };
 
 #ifdef CONFIG_F2FS_FS_ENCRYPTION
@@ -999,6 +1018,7 @@ static loff_t max_file_blocks(void)
 	return result;  //result = 1057053445
 }
 
+/* 将f2fs_super_block的内容拷贝到buffer_head对应的块缓冲区页，提交bio请求，写回磁盘 */
 static int __f2fs_commit_super(struct buffer_head *bh,
 			struct f2fs_super_block *super)
 {
@@ -1006,10 +1026,12 @@ static int __f2fs_commit_super(struct buffer_head *bh,
 	if (super)
 		memcpy(bh->b_data + F2FS_SUPER_OFFSET, super, sizeof(*super));
 	set_buffer_uptodate(bh);
-	set_buffer_dirty(bh);
+	set_buffer_dirty(bh);  //buffer_head设置为脏，等待写回
 	unlock_buffer(bh);
 
-	/* it's rare case, we can do fua all the time */
+	/* it's rare case, we can do fua all the time 
+		提交bio请求，将buffer_head对应的块写回磁盘
+	*/
 	return __sync_dirty_buffer(bh, WRITE_FLUSH_FUA);
 }
 
@@ -1282,9 +1304,9 @@ static int read_raw_super_block(struct super_block *sb,
 	if (!super)
 		return -ENOMEM;
 
-	/* 读两个超级块 */
+	/* 读两个超级块，逻辑块号分别是0和1 */
 	for (block = 0; block < 2; block++) {
-		/* 读取超级块所在的数据块，磁盘中的一个block读到内存中对应着一个buffer_head */
+		/* 读取超级块所在的block，磁盘中的一个block读到内存中对应着一个buffer_head */
 		bh = sb_bread(sb, block);
 		if (!bh) {
 			f2fs_msg(sb, KERN_ERR, "Unable to read %dth superblock",
@@ -1326,15 +1348,19 @@ static int read_raw_super_block(struct super_block *sb,
 	return err;
 }
 
+/* 将内存中的f2fs_super_block结构写回磁盘的SB区域 */
 int f2fs_commit_super(struct f2fs_sb_info *sbi, bool recover)
 {
 	struct buffer_head *bh;
 	int err;
 
-	/* write back-up superblock first */
-	bh = sb_getblk(sbi->sb, sbi->valid_super_block ? 0: 1);
+	/* write back-up superblock first 
+		首先将f2fs_super_block写回备用的SB区域。
+	*/
+	bh = sb_getblk(sbi->sb, sbi->valid_super_block ? 0: 1);  //将备用的SB区域读到内存中的一个块缓冲页，对应着一个buffer_head结构
 	if (!bh)
 		return -EIO;
+	/* f2fs_super_block的内容拷贝到buffer_head对应的块缓冲区页，提交bio请求，写回磁盘 */
 	err = __f2fs_commit_super(bh, F2FS_RAW_SUPER(sbi));
 	brelse(bh);
 
@@ -1351,7 +1377,7 @@ int f2fs_commit_super(struct f2fs_sb_info *sbi, bool recover)
 	return err;
 }
 
-/* 从磁盘上读取superblock元数据信息，填充内存中的superblock对象。
+/* 从磁盘上读取superblock元数据信息，填充内存中的superblock和f2fs_sb_info对象。
 	该函数在mount过程中调用
 */
 static int f2fs_fill_super(struct super_block *sb, void *data, int silent)
@@ -1405,13 +1431,15 @@ try_onemore:
 	sb->s_fs_info = sbi;
 	/* 对f2fs_sb_info进行默认设置 */
 	default_options(sbi);
-	/* parse mount options */
+	/* parse mount options
+	*/
 	options = kstrdup((const char *)data, GFP_KERNEL);
 	if (data && !options) {
 		err = -ENOMEM;
 		goto free_sb_buf;
 	}
 
+	/* 解析挂载参数 */
 	err = parse_options(sb, options);
 	if (err)
 		goto free_options;
@@ -1463,7 +1491,7 @@ try_onemore:
 	init_sb_info(sbi);
 
 	/* get an inode for meta space 
-	将f2fs的所有元数据区域视为一个文件，为这个文件创建inode
+	将f2fs的所有元数据区域视为一个元数据文件，为这个文件创建inode;meta inode节点号=2
 	*/
 	sbi->meta_inode = f2fs_iget(sb, F2FS_META_INO(sbi));
 	if (IS_ERR(sbi->meta_inode)) {
@@ -1497,13 +1525,18 @@ try_onemore:
 
 	init_ino_entry_info(sbi);
 
-	/* setup f2fs internal modules */
+	/* setup f2fs internal modules 
+		初始化f2fs_sb_info里面的一些内置结构，如f2fs_sm_info/f2fs_nm_info
+	*/
+
+	/*初始化f2fs_sb_info里面的f2fs_sm_info结构*/
 	err = build_segment_manager(sbi);
 	if (err) {
 		f2fs_msg(sb, KERN_ERR,
 			"Failed to initialize F2FS segment manager");
 		goto free_sm;
 	}
+	/*初始化f2fs_sb_info里面的f2fs_nm_info结构*/
 	err = build_node_manager(sbi);
 	if (err) {
 		f2fs_msg(sb, KERN_ERR,
@@ -1524,7 +1557,10 @@ try_onemore:
 
 	build_gc_manager(sbi);
 
-	/* get an inode for node space */
+	/* get an inode for node space 
+		为node区域（inode号为1）申请一个inode，并初始化
+		所有的node当做同一个文件管理，对应着同一个node_inode(与meta_inode相同)。
+	*/
 	sbi->node_inode = f2fs_iget(sb, F2FS_NODE_INO(sbi));
 	if (IS_ERR(sbi->node_inode)) {
 		f2fs_msg(sb, KERN_ERR, "Failed to read node inode");
@@ -1532,6 +1568,7 @@ try_onemore:
 		goto free_nm;
 	}
 
+	/* For shrinker support */
 	f2fs_join_shrinker(sbi);
 
 	/* if there are nt orphan nodes free them */
@@ -1539,7 +1576,9 @@ try_onemore:
 	if (err)
 		goto free_node_inode;
 
-	/* read root inode and dentry */
+	/* read root inode and dentry 
+		为根目录“/”（inode号为0）申请一个inode，并初始化
+	*/
 	root = f2fs_iget(sb, F2FS_ROOT_INO(sbi));
 	if (IS_ERR(root)) {
 		f2fs_msg(sb, KERN_ERR, "Failed to read root inode");
@@ -1552,12 +1591,14 @@ try_onemore:
 		goto free_node_inode;
 	}
 
+	/* 申请根目录“/”的dentry结构 */
 	sb->s_root = d_make_root(root); /* allocate root dentry */
 	if (!sb->s_root) {
 		err = -ENOMEM;
 		goto free_root_inode;
 	}
 
+	/* 初始化f2fs_stat_info结构； */
 	err = f2fs_build_stats(sbi);
 	if (err)
 		goto free_root_inode;
@@ -1569,6 +1610,7 @@ try_onemore:
 		proc_create_data("segment_info", S_IRUGO, sbi->s_proc,
 				 &f2fs_seq_segment_info_fops, sb);
 
+	/* For sysfs support */
 	sbi->s_kobj.kset = f2fs_kset;
 	init_completion(&sbi->s_kobj_unregister);
 	err = kobject_init_and_add(&sbi->s_kobj, &f2fs_ktype, NULL,
@@ -1603,19 +1645,23 @@ try_onemore:
 	clear_sbi_flag(sbi, SBI_POR_DOING);
 
 	/*
+		F2FS：启动后台GC线程。
 	 * If filesystem is not mounted as read-only then
 	 * do start the gc_thread.
 	 */
 	if (test_opt(sbi, BG_GC) && !f2fs_readonly(sb)) {
 		/* After POR, we can run background GC thread.*/
-		err = start_gc_thread(sbi);
+		err = start_gc_thread(sbi);   //启动GC线程
 		if (err)
 			goto free_kobj;
 	}
 	kfree(options);
 
-	/* recover broken superblock */
+	/* recover broken superblock 
+		修复磁盘中受损的superblock区域
+	*/
 	if (recovery && !f2fs_readonly(sb) && !bdev_read_only(sb->s_bdev)) {
+		/* 将内存中有效的superblock写回到磁盘中受损的superblock区域，可以修复受损区域 */
 		err = f2fs_commit_super(sbi, true);
 		f2fs_msg(sb, KERN_INFO,
 			"Try to recover %dth superblock, ret: %ld",
@@ -1694,6 +1740,7 @@ static struct file_system_type f2fs_fs_type = {
 };
 MODULE_ALIAS_FS("f2fs");
 
+/* 为f2fs_inode_info申请slab缓存 */
 static int __init init_inodecache(void)
 {
 	f2fs_inode_cachep = kmem_cache_create("f2fs_inode_cache",
@@ -1714,12 +1761,14 @@ static void destroy_inodecache(void)
 	kmem_cache_destroy(f2fs_inode_cachep);
 }
 
+/* f2fs模块初始化 */
 static int __init init_f2fs_fs(void)
 {
 	int err;
 
 	f2fs_build_trace_ios();
 
+	/* 下面为一些关键的cache结构申请slab缓存 */
 	err = init_inodecache();
 	if (err)
 		goto fail;
@@ -1740,10 +1789,13 @@ static int __init init_f2fs_fs(void)
 		err = -ENOMEM;
 		goto free_extent_cache;
 	}
+
+	/* 注册F2FS shrinker，用于内存页面回收机制 */
 	err = register_shrinker(&f2fs_shrinker_info);
 	if (err)
 		goto free_kset;
 
+	/* 注册F2FS文件系统 */
 	err = register_filesystem(&f2fs_fs_type);
 	if (err)
 		goto free_shrinker;
@@ -1773,6 +1825,7 @@ fail:
 	return err;
 }
 
+/* 退出F2FS模块，过程与init_f2fs_fs完全相反 */
 static void __exit exit_f2fs_fs(void)
 {
 	remove_proc_entry("fs/f2fs", NULL);

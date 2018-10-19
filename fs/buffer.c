@@ -3157,6 +3157,7 @@ void write_dirty_buffer(struct buffer_head *bh, int rw)
 EXPORT_SYMBOL(write_dirty_buffer);
 
 /*
+	提交bio请求，将buffer_head对应的块写回磁盘
  * For a data-integrity writeout, we need to wait upon any in-progress I/O
  * and then start new I/O and then wait upon it.  The caller must have a ref on
  * the buffer_head.

@@ -182,7 +182,7 @@ struct inode *f2fs_iget(struct super_block *sb, unsigned long ino)
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
 
-	/* 该inode不是新inode，直接返回该inode */
+	/* 该inode不是新创建的inode，直接返回该inode */
 	if (!(inode->i_state & I_NEW)) {
 		trace_f2fs_iget(inode);
 		return inode;
@@ -192,14 +192,14 @@ struct inode *f2fs_iget(struct super_block *sb, unsigned long ino)
 	if (ino == F2FS_NODE_INO(sbi) || ino == F2FS_META_INO(sbi))
 		goto make_now;
 
-	/* 索引节点是DATA节点：依据inode的节点号，将inode对应的block读到页缓存，此时磁盘上的f2fs_node节点就位于页缓存中。
+	/* 索引节点是除去NODE节点和META节点的其他节点：依据inode的节点号，将inode对应的block读到页缓存，此时磁盘上的f2fs_node节点就位于页缓存中。
 		使用f2fs_node 对inode初始化 */
 	ret = do_read_inode(inode);
 	if (ret)
 		goto bad_inode;
 make_now:
 
-	/* 依据ino对应的节点类型或者文件类型，赋予inode不同的操作方法 */
+	/* 依据ino号对应的NODE类型或者文件类型，赋予inode索引节点不同的操作方法 */
 	if (ino == F2FS_NODE_INO(sbi)) {   //ino是NODE节点
 		inode->i_mapping->a_ops = &f2fs_node_aops;
 		mapping_set_gfp_mask(inode->i_mapping, GFP_F2FS_ZERO);
@@ -240,14 +240,17 @@ bad_inode:
 	return ERR_PTR(ret);
 }
 
+/* 使用脏inode初始化f2fs_inode，并标记f2fs_inode为脏，等待f2fs_inode写回 */
 int update_inode(struct inode *inode, struct page *node_page)
 {
 	struct f2fs_inode *ri;
 
+	/* 等待node_page完成写回操作 */
 	f2fs_wait_on_page_writeback(node_page, NODE, true);
 
-	ri = F2FS_INODE(node_page);
+	ri = F2FS_INODE(node_page);  //node_page转换成f2fs_inode结构，两个结构尺寸相同为4KB
 
+	/* 使用脏inode的字段初始化f2fs_inode的字段 */
 	ri->i_mode = cpu_to_le16(inode->i_mode);
 	ri->i_advise = F2FS_I(inode)->i_advise;
 	ri->i_uid = cpu_to_le32(i_uid_read(inode));
@@ -280,12 +283,14 @@ int update_inode(struct inode *inode, struct page *node_page)
 	set_cold_node(inode, node_page);
 	clear_inode_flag(F2FS_I(inode), FI_DIRTY_INODE);
 
-	/* deleted inode */
+	/* deleted inode 
+	*/
 	if (inode->i_nlink == 0)
 		clear_inline_node(node_page);
 
 	return set_page_dirty(node_page);
 }
+
 
 int update_inode_page(struct inode *inode)
 {
@@ -293,6 +298,7 @@ int update_inode_page(struct inode *inode)
 	struct page *node_page;
 	int ret = 0;
 retry:
+	/*依据inode节点号，首先查询页缓存，未找到则将inode所在的磁盘block读到页缓存，返回页缓存中的page*/
 	node_page = get_node_page(sbi, inode->i_ino);
 	if (IS_ERR(node_page)) {
 		int err = PTR_ERR(node_page);
@@ -304,11 +310,13 @@ retry:
 		}
 		return 0;
 	}
+	/* 使用脏inode初始化f2fs_inode（f2fs_inode对应着页缓存中的一个page） */
 	ret = update_inode(inode, node_page);
 	f2fs_put_page(node_page, 1);
 	return ret;
 }
 
+/* F2FS write_inode方法：将脏inode写回磁盘区域 */
 int f2fs_write_inode(struct inode *inode, struct writeback_control *wbc)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
@@ -325,6 +333,7 @@ int f2fs_write_inode(struct inode *inode, struct writeback_control *wbc)
 	 * during the urgent cleaning time when runing out of free sections.
 	 */
 	if (update_inode_page(inode))
+		/* balance_fs启动GC过程 */
 		f2fs_balance_fs(sbi, true);
 	return 0;
 }

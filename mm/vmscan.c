@@ -222,6 +222,7 @@ unsigned long lruvec_lru_size(struct lruvec *lruvec, enum lru_list lru)
 }
 
 /*
+	注册F2FS shrinker，用于内存页面回收机制
  * Add a shrinker callback to be called from the vm.
  */
 int register_shrinker(struct shrinker *shrinker)

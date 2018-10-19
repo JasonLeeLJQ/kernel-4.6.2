@@ -30,13 +30,13 @@
 #define F2FS_BLK_TO_BYTES(blk)		((blk) << F2FS_BLKSIZE_BITS)
 
 /* 0, 1(node nid), 2(meta nid) are reserved node id 
-	节点号0/1/2是保留节点，节点1用作node 号，节点2用作meta id
+	节点号0/1/2是保留节点，节点0，1用作node 号，节点2用作meta inode号
 */
 #define F2FS_RESERVED_NODE_NUM		3
 
-#define F2FS_ROOT_INO(sbi)	(sbi->root_ino_num)
-#define F2FS_NODE_INO(sbi)	(sbi->node_ino_num)
-#define F2FS_META_INO(sbi)	(sbi->meta_ino_num)
+#define F2FS_ROOT_INO(sbi)	(sbi->root_ino_num)   //0
+#define F2FS_NODE_INO(sbi)	(sbi->node_ino_num)   //1
+#define F2FS_META_INO(sbi)	(sbi->meta_ino_num)   //2
 
 /* This flag is used by node and meta inodes, and by recovery */
 #define GFP_F2FS_ZERO		(GFP_NOFS | __GFP_ZERO)
@@ -94,7 +94,7 @@ struct f2fs_super_block {
 	__le32 ssa_blkaddr;		/* start block address of SSA */
 	__le32 main_blkaddr;		/* start block address of main area */
 	
-	__le32 root_ino;		/* root inode number = 3*/
+	__le32 root_ino;		/* root inode number = 0*/
 	__le32 node_ino;		/* node inode number = 1*/
 	__le32 meta_ino;		/* meta inode number = 2*/
 	__u8 uuid[16];			/* 128-bit uuid for volume */
@@ -262,6 +262,17 @@ enum {
 
 #define OFFSET_BIT_MASK		(0x07)	/* (0x01 << OFFSET_BIT_SHIFT) - 1 */
 
+/* 
+	区分一个NODE block里是inode还是普通的dnode，
+	只要比较footer中的nid和ino两个域就可以了。
+	二者如果相等那么这个block里面就是个inode，否则就是普通的dnode。 
+
+	再分析：
+	新建一个文件的时候，会从VFS层分配一个inode，但是这个inode结构的 ino 是不确定的，
+	需要f2fs给它一个值，这个值f2fs通过alloc_nid函数获得，从可用的nid的选择一个，
+	把这个值作为新申请的文件的ino，这样一来，inode的ino和nid就成一样的了。
+	但是对于普通dnode来说，nid还是分配的这个nid，但是ino必须要赋值成文件的ino了。
+*/
 struct node_footer {
 	__le32 nid;		/* node id */
 	__le32 ino;		/* inode nunmber */

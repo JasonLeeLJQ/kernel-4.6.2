@@ -997,7 +997,7 @@ struct dentry *mount_bdev(struct file_system_type *fs_type,
 	if (IS_ERR(s))
 		goto error_s;
 
-	if (s->s_root) {
+	if (s->s_root) {  /* s_root不为空，说明文件系统的超级块已经从磁盘读取了 */
 		if ((flags ^ s->s_flags) & MS_RDONLY) {
 			deactivate_locked_super(s);
 			error = -EBUSY;
