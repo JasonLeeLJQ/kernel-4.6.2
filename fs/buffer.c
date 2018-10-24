@@ -1453,6 +1453,10 @@ struct buffer_head *
 __bread_gfp(struct block_device *bdev, sector_t block,
 		   unsigned size, gfp_t gfp)
 {
+	/* 
+	   查找逻辑块号block对应的buffer_head，
+	   如果找不到，则使用grow_buffers创建新的buffer_head，并将块设备缓冲区页插入到页缓存
+	*/
 	struct buffer_head *bh = __getblk_gfp(bdev, block, size, gfp);
 
 	/* 返回的buffer_head对应的数据不是最新的，向块设备提交bio请求，读取块设备 */

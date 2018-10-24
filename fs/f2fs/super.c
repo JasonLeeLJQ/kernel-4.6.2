@@ -1378,7 +1378,7 @@ int f2fs_commit_super(struct f2fs_sb_info *sbi, bool recover)
 }
 
 /* 从磁盘上读取superblock元数据信息，填充内存中的superblock和f2fs_sb_info对象。
-	该函数在mount过程中调用
+	该函数在mount过程中作为回调函数调用
 */
 static int f2fs_fill_super(struct super_block *sb, void *data, int silent)
 {
@@ -1398,7 +1398,7 @@ try_onemore:
 	recovery = 0;
 
 	/* allocate memory for f2fs-specific super block info
-	 申请特定F2FS的超级块对象（f2fs_sb_info）
+	 申请特定于F2FS的超级块对象（f2fs_sb_info）
 	*/
 	sbi = kzalloc(sizeof(struct f2fs_sb_info), GFP_KERNEL);
 	if (!sbi)

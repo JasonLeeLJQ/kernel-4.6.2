@@ -629,12 +629,16 @@ static inline void check_block_count(struct f2fs_sb_info *sbi,
 					|| segno > TOTAL_SEGS(sbi) - 1);
 }
 
+/*
+	依据start（逻辑f2fs_sit_entry号），获取f2fs_sit_entry所在的block相对于SIT区域的偏移地址
+	该偏移地址仅仅是逻辑块号，不是逻辑块地址
+*/
 static inline pgoff_t current_sit_addr(struct f2fs_sb_info *sbi,
 						unsigned int start)
 {
 	struct sit_info *sit_i = SIT_I(sbi);
-	unsigned int offset = SIT_BLOCK_OFFSET(start);
-	block_t blk_addr = sit_i->sit_base_addr + offset;
+	unsigned int offset = SIT_BLOCK_OFFSET(start); //位于第几个block（从SIT区域开始算起）
+	block_t blk_addr = sit_i->sit_base_addr + offset; //相对于磁盘起始位置的逻辑块号
 
 	check_seg_range(sbi, start);
 
@@ -642,9 +646,12 @@ static inline pgoff_t current_sit_addr(struct f2fs_sb_info *sbi,
 	if (f2fs_test_bit(offset, sit_i->sit_bitmap))
 		blk_addr += sit_i->sit_blocks;
 
-	return blk_addr;
+	return blk_addr;  //返回的是逻辑块号，并不是逻辑块地址
 }
 
+/* SIT有两个完全相同且相邻的区域；一个是当前使用的SIT区域，另一个是checkpoint有效的SIT区域
+	假设block_addr位于当前SIT区域内，该函数可以得到另一个SIT区域相对偏移量完全相同的地址
+*/
 static inline pgoff_t next_sit_addr(struct f2fs_sb_info *sbi,
 						pgoff_t block_addr)
 {

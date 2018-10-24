@@ -1862,6 +1862,7 @@ int lookup_journal_in_cursum(struct f2fs_journal *journal, int type,
 	return -1;
 }
 
+/* 读取磁盘SIT区域，获取到segno对应的sit entry所在的page */
 static struct page *get_current_sit_page(struct f2fs_sb_info *sbi,
 					unsigned int segno)
 {
@@ -2260,6 +2261,7 @@ static int build_curseg(struct f2fs_sb_info *sbi)
 	return restore_curseg_summaries(sbi);
 }
 
+/* 读取磁盘SIT区域，获得f2fs_sit_entry对象来建立sit_entry结构 */
 static void build_sit_entries(struct f2fs_sb_info *sbi)
 {
 	struct sit_info *sit_i = SIT_I(sbi);
@@ -2271,11 +2273,13 @@ static void build_sit_entries(struct f2fs_sb_info *sbi)
 	int nrpages = MAX_BIO_BLOCKS(sbi) * 8;
 
 	do {
+		/* 预读SIT区域元数据页，返回预读的总页数readed */
 		readed = ra_meta_pages(sbi, start_blk, nrpages, META_SIT, true);
 
-		start = start_blk * sit_i->sents_per_block;
+		start = start_blk * sit_i->sents_per_block; //起始于第几个sit_entry
 		end = (start_blk + readed) * sit_i->sents_per_block;
 
+		/* 对读取到的每一个SIT区域的page拆分，拆分成一个个f2fs_sit_entry结构 */
 		for (; start < end && start < MAIN_SEGS(sbi); start++) {
 			struct seg_entry *se = &sit_i->sentries[start];
 			struct f2fs_sit_block *sit_blk;
@@ -2283,6 +2287,7 @@ static void build_sit_entries(struct f2fs_sb_info *sbi)
 			struct page *page;
 
 			down_read(&curseg->journal_rwsem);
+			/* 首先查找f2fs_journal中是否存在和逻辑号start相同的f2fs_sit_entry */
 			for (i = 0; i < sits_in_cursum(journal); i++) {
 				if (le32_to_cpu(segno_in_journal(journal, i))
 								== start) {
@@ -2293,12 +2298,17 @@ static void build_sit_entries(struct f2fs_sb_info *sbi)
 			}
 			up_read(&curseg->journal_rwsem);
 
+			/* 
+			   如果journal中不存在，在查找meta_inode的address_space是否存在对应的page。
+			   如果还不存在，则读取磁盘SIT区域，获取start对应的sit entry所在的page 
+			*/
 			page = get_current_sit_page(sbi, start);
 			sit_blk = (struct f2fs_sit_block *)page_address(page);
 			sit = sit_blk->entries[SIT_ENTRY_OFFSET(sit_i, start)];
 			f2fs_put_page(page, 1);
 got_it:
 			check_block_count(sbi, start, &sit);
+			/* 使用f2fs_sit_entry初始化seg_entry */
 			seg_info_from_raw_sit(se, &sit);
 
 			/* build discard map only one time */
@@ -2462,20 +2472,24 @@ int build_segment_manager(struct f2fs_sb_info *sbi)
 			return err;
 	}
 
+	/* 建立sit_info */
 	err = build_sit_info(sbi);
 	if (err)
 		return err;
+	/* 建立free_segmap_info */
 	err = build_free_segmap(sbi);
 	if (err)
 		return err;
+	/* 建立curseg_info */
 	err = build_curseg(sbi);
 	if (err)
 		return err;
 
 	/* reinit free segmap based on SIT */
-	build_sit_entries(sbi);
+	build_sit_entries(sbi);  //读取磁盘SIT区域，建立sit_entry结构
 
 	init_free_segmap(sbi);
+	/* 建立dirty_seglist_info  */
 	err = build_dirty_segmap(sbi);
 	if (err)
 		return err;

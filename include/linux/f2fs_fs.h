@@ -57,7 +57,9 @@
 
 /*
  * For superblock
- 	超级块
+ 	超级块（共3072个字节）
+ 	一个block尺寸为4096字节；
+ 	前1024字节为空，后3072个字节为超级块区域（OFFSET=1024）
  */
 struct f2fs_super_block {
 	__le32 magic;			/* Magic Number */
@@ -82,7 +84,7 @@ struct f2fs_super_block {
 	/* CP/SIT/NAT/SSA/MAIN_AREA区域的segment数量 */
 	__le32 segment_count_ckpt;	/* # of segments for checkpoint、 checkpoint占据segment的个数*/
 	__le32 segment_count_sit;	/* # of segments for SIT 、SIT占据segment的个数*/
-	__le32 segment_count_nat;	/* # of segments for NAT 、NAT占据segment的个数*/
+	__le32 segment_count_nat;	/* # of segments for NAT 、NAT占据segment的个数（两个NAT区域中segment总个数）*/
 	__le32 segment_count_ssa;	/* # of segments for SSA 、SSA占据segment的个数*/
 	__le32 segment_count_main;	/* # of segments for main area 、main area占据segment的个数*/
 	__le32 segment0_blkaddr;	/* start block address of segment 0 */
@@ -94,7 +96,7 @@ struct f2fs_super_block {
 	__le32 ssa_blkaddr;		/* start block address of SSA */
 	__le32 main_blkaddr;		/* start block address of main area */
 	
-	__le32 root_ino;		/* root inode number = 0*/
+	__le32 root_ino;		/* root inode number = 3*/
 	__le32 node_ino;		/* node inode number = 1*/
 	__le32 meta_ino;		/* meta inode number = 2*/
 	__u8 uuid[16];			/* 128-bit uuid for volume */

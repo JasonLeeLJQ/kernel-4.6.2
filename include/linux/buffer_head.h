@@ -66,7 +66,7 @@ typedef void (bh_end_io_t)(struct buffer_head *bh, int uptodate);
 struct buffer_head {
 	unsigned long b_state;		/* buffer state bitmap (see above) 缓冲区状态标志*/
 	struct buffer_head *b_this_page;/* circular list of page's buffers 指向下一个buffer_head*/
-	struct page *b_page;		/* the page this bh is mapped to、 buffer_head所在的page*/
+	struct page *b_page;		/* the page this bh is mapped to、 buffer_head所映射的page*/
 
 	sector_t b_blocknr;		/* start block number 对应块设备的block的编号（逻辑块号、因为磁盘上一个block对应内存中的一个buffer_head）*/
 	size_t b_size;			/* size of mapping 、块大小*/

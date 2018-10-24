@@ -462,7 +462,7 @@ struct f2fs_nm_info {
 	nid_t available_nids;		/* maximum available node ids */
 	nid_t next_scan_nid;		/* the next nid to be scanned */
 	unsigned int ram_thresh;	/* control the memory footprint */
-	unsigned int ra_nid_pages;	/* # of nid pages to be readaheaded */
+	unsigned int ra_nid_pages;	/* # of nid pages to be readaheaded 预读页个数=4*/
 	unsigned int dirty_nats_ratio;	/* control dirty nats ratio threshold */
 
 	/* NAT cache management 
@@ -569,7 +569,7 @@ struct f2fs_sm_info {
 	struct dirty_seglist_info *dirty_info;	/* dirty segment information */
 	struct curseg_info *curseg_array;	/* active segment information */
 
-	block_t seg0_blkaddr;		/* block address of 0'th segment ，第0个segment的起始块地址*/
+	block_t seg0_blkaddr;		/* block address of 0'th segment ，第0个segment的起始块地址（从CP区域开始算）*/
 	block_t main_blkaddr;		/* start block address of main area，main区域的起始块地址 */
 	block_t ssa_blkaddr;		/* start block address of SSA area ，SSA区域的起始块地址*/
 
@@ -727,7 +727,7 @@ struct f2fs_sb_info {
 		bio操作：读、写
 	*/
 	struct f2fs_bio_info read_io;			/* for read bios */
-	struct f2fs_bio_info write_io[NR_PAGE_TYPE];	/* for write bios */
+	struct f2fs_bio_info write_io[NR_PAGE_TYPE];	/* for write bios （DATA/NODE/META）*/
 
 	/* for checkpoint */
 	struct f2fs_checkpoint *ckpt;		/* raw checkpoint pointer 指向CP区域*/

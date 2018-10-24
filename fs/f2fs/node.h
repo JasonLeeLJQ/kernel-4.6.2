@@ -46,6 +46,7 @@ enum {
 /*
  * For node information
  	F2FS中的node节点信息
+ 	通过查询NAT表获得node的块地址，填充node_info结构
  */
 struct node_info {
 	nid_t nid;		/* node id */
@@ -55,6 +56,7 @@ struct node_info {
 	unsigned char flag;	/* for node information bits */
 };
 
+/* nat entry cache，通过f2fs_nm_info->nat_root组织在一起 */
 struct nat_entry {
 	struct list_head list;	/* for clean or dirty nat list */
 	struct node_info ni;	/* in-memory node information */
@@ -105,6 +107,7 @@ static inline void nat_reset_flag(struct nat_entry *ne)
 	set_nat_flag(ne, HAS_LAST_FSYNC, true);
 }
 
+/* 使用f2fs_nat_entry结构初始化nat_entry */
 static inline void node_info_from_raw_nat(struct node_info *ni,
 						struct f2fs_nat_entry *raw_ne)
 {
@@ -181,6 +184,9 @@ static inline void get_nat_bitmap(struct f2fs_sb_info *sbi, void *addr)
 	memcpy(addr, nm_i->nat_bitmap, nm_i->bitmap_size);
 }
 
+/* 因为NAT表是按照nid节点号顺序存放的；
+   依据nid节点号，获取f2fs_nat_entry所在的block相对于NAT区域的偏移地址（返回的是逻辑块号）
+*/
 static inline pgoff_t current_nat_addr(struct f2fs_sb_info *sbi, nid_t start)
 {
 	struct f2fs_nm_info *nm_i = NM_I(sbi);
@@ -188,9 +194,10 @@ static inline pgoff_t current_nat_addr(struct f2fs_sb_info *sbi, nid_t start)
 	pgoff_t block_addr;
 	int seg_off;
 
-	block_off = NAT_BLOCK_OFFSET(start);
-	seg_off = block_off >> sbi->log_blocks_per_seg;
+	block_off = NAT_BLOCK_OFFSET(start); //第几个块
+	seg_off = block_off >> sbi->log_blocks_per_seg;  //第几个segment
 
+	/* 计算相对于NAT区域的偏移地址 */
 	block_addr = (pgoff_t)(nm_i->nat_blkaddr +
 		(seg_off << sbi->log_blocks_per_seg << 1) +
 		(block_off & (sbi->blocks_per_seg - 1)));

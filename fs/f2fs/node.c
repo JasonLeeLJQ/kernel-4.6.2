@@ -95,9 +95,16 @@ static void clear_node_page_dirty(struct page *page)
 	ClearPageUptodate(page);
 }
 
+/* 读取磁盘NAT区域，获得nid节点号对应的nat page */
 static struct page *get_current_nat_page(struct f2fs_sb_info *sbi, nid_t nid)
-{
+{	
+	/* 
+	   依据nid节点号，获取f2fs_nat_entry所在的block获取相对于NAT区域的偏移地址
+	   index:代表的是逻辑块号，不是逻辑块地址
+	*/
 	pgoff_t index = current_nat_addr(sbi, nid);
+
+	/* 依据block的偏移地址index，读取该block，返回block对应的page */
 	return get_meta_page(sbi, index);
 }
 
@@ -130,6 +137,7 @@ static struct page *get_next_nat_page(struct f2fs_sb_info *sbi, nid_t nid)
 	return dst_page;
 }
 
+/* 查找nat   cache是否存在节点号为nid的nat_entry */
 static struct nat_entry *__lookup_nat_cache(struct f2fs_nm_info *nm_i, nid_t n)
 {
 	return radix_tree_lookup(&nm_i->nat_root, n);
@@ -243,6 +251,7 @@ bool need_inode_block_update(struct f2fs_sb_info *sbi, nid_t ino)
 	return need_update;
 }
 
+/* 申请新的nat_entry对象，并插入到nat_root树 */
 static struct nat_entry *grab_nat_entry(struct f2fs_nm_info *nm_i, nid_t nid)
 {
 	struct nat_entry *new;
@@ -257,14 +266,16 @@ static struct nat_entry *grab_nat_entry(struct f2fs_nm_info *nm_i, nid_t nid)
 	return new;
 }
 
+/* 将f2fs_nat_entry转换成nat_entry，缓存在nat cache中 */
 static void cache_nat_entry(struct f2fs_sb_info *sbi, nid_t nid,
 						struct f2fs_nat_entry *ne)
 {
 	struct f2fs_nm_info *nm_i = NM_I(sbi);
 	struct nat_entry *e;
 
+	/* 查找nat   cache是否存在节点号为nid的nat_entry */
 	e = __lookup_nat_cache(nm_i, nid);
-	if (!e) {
+	if (!e) { //不存在，则申请新的nat_entry对象，并使用f2fs_nat_entry结构初始化nat_entry
 		e = grab_nat_entry(nm_i, nid);
 		node_info_from_raw_nat(&e->ni, ne);
 	} else {
@@ -353,6 +364,7 @@ int try_to_free_nats(struct f2fs_sb_info *sbi, int nr_shrink)
 }
 
 /*
+	读取NAT表，获得node的块地址等信息，存放在ni中（ni中存放着node对应的block地址，node id）
  * This function always returns success
  */
 void get_node_info(struct f2fs_sb_info *sbi, nid_t nid, struct node_info *ni)
@@ -369,7 +381,9 @@ void get_node_info(struct f2fs_sb_info *sbi, nid_t nid, struct node_info *ni)
 
 	ni->nid = nid;
 
-	/* Check nat cache */
+	/* Check nat cache 
+	首先查找nat cache，如果查找到对应的nat_entry，则直接对node_info初始化
+	*/
 	down_read(&nm_i->nat_tree_lock);
 	e = __lookup_nat_cache(nm_i, nid);
 	if (e) {
@@ -382,19 +396,23 @@ void get_node_info(struct f2fs_sb_info *sbi, nid_t nid, struct node_info *ni)
 
 	memset(&ne, 0, sizeof(struct f2fs_nat_entry));
 
-	/* Check current segment summary */
+	/* Check current segment summary 
+	查找SSA区域中的journal，是否存在节点号为nid的f2fs_nat_entry（已经被修改但未写入到NAT区域，暂存到SSA中的f2fs_journal中）
+	*/
 	down_read(&curseg->journal_rwsem);
 	i = lookup_journal_in_cursum(journal, NAT_JOURNAL, nid, 0);
 	if (i >= 0) {
 		ne = nat_in_journal(journal, i);
-		node_info_from_raw_nat(ni, &ne);
+		node_info_from_raw_nat(ni, &ne);  //使用ne对ni初始化
 	}
 	up_read(&curseg->journal_rwsem);
 	if (i >= 0)
 		goto cache;
 
-	/* Fill node_info from nat page */
-	page = get_current_nat_page(sbi, start_nid);
+	/* Fill node_info from nat page 
+	如果在nat cache和journal中都未找到，则需要读取磁盘中nat对应的block
+	*/
+	page = get_current_nat_page(sbi, start_nid);  //nat_entry所在的page
 	nat_blk = (struct f2fs_nat_block *)page_address(page);
 	ne = nat_blk->entries[nid - start_nid];
 	node_info_from_raw_nat(ni, &ne);
@@ -403,6 +421,7 @@ cache:
 	up_read(&nm_i->nat_tree_lock);
 	/* cache nat entry */
 	down_write(&nm_i->nat_tree_lock);
+	/* 将f2fs_nat_entry转换成nat_entry，缓存在nat cache中 */
 	cache_nat_entry(sbi, nid, &ne);
 	up_write(&nm_i->nat_tree_lock);
 }
@@ -1061,7 +1080,7 @@ static int read_node_page(struct page *page, int rw)
 		.encrypted_page = NULL,
 	};
 
-	/* 读取NAT表，获得node信息，存放在ni中（ni中存放着node对应的block地址，node id） */
+	/* 读取NAT表，获得node的块地址等信息，存放在ni中（ni中存放着node对应的block地址，node id） */
 	get_node_info(sbi, page->index, &ni);
 
 	if (unlikely(ni.blk_addr == NULL_ADDR)) {
@@ -1535,6 +1554,7 @@ static void __del_from_free_nid_list(struct f2fs_nm_info *nm_i,
 	radix_tree_delete(&nm_i->free_nid_root, i->nid);
 }
 
+/* 将f2fs_nat_entry转换成free_nid结构，插入到f2fs_nm_info->free_nid_root和f2fs_nm_info->free_nid_list  */
 static int add_free_nid(struct f2fs_sb_info *sbi, nid_t nid, bool build)
 {
 	struct f2fs_nm_info *nm_i = NM_I(sbi);
@@ -1600,6 +1620,9 @@ static void remove_free_nid(struct f2fs_nm_info *nm_i, nid_t nid)
 		kmem_cache_free(free_nid_slab, i);
 }
 
+/* 扫描NAT page中空闲的f2fs_nat_entry,
+   将f2fs_nat_entry转换成free_nid结构，插入到f2fs_nm_info->free_nid_root和f2fs_nm_info->free_nid_list 
+*/
 static void scan_nat_page(struct f2fs_sb_info *sbi,
 			struct page *nat_page, nid_t start_nid)
 {
@@ -1615,15 +1638,18 @@ static void scan_nat_page(struct f2fs_sb_info *sbi,
 		if (unlikely(start_nid >= nm_i->max_nid))
 			break;
 
+		/* 通过判断blk_addr块地址，地址为0则代表该f2fs_nat_entry是空闲的 */
 		blk_addr = le32_to_cpu(nat_blk->entries[i].block_addr);
 		f2fs_bug_on(sbi, blk_addr == NEW_ADDR);
 		if (blk_addr == NULL_ADDR) {
+			/* 将f2fs_nat_entry转换成free_nid结构，插入到f2fs_nm_info->free_nid_root和f2fs_nm_info->free_nid_list  */
 			if (add_free_nid(sbi, start_nid, true) < 0)
 				break;
 		}
 	}
 }
 
+/* 建立free_nid结构 */
 static void build_free_nids(struct f2fs_sb_info *sbi)
 {
 	struct f2fs_nm_info *nm_i = NM_I(sbi);
@@ -1636,15 +1662,21 @@ static void build_free_nids(struct f2fs_sb_info *sbi)
 	if (nm_i->fcnt > NAT_ENTRY_PER_BLOCK)
 		return;
 
-	/* readahead nat pages to be scanned */
+	/* readahead nat pages to be scanned 
+		预读NAT区域的page
+	*/
 	ra_meta_pages(sbi, NAT_BLOCK_OFFSET(nid), FREE_NID_PAGES,
 							META_NAT, true);
 
 	down_read(&nm_i->nat_tree_lock);
 
 	while (1) {
+		//获取nid节点号对应的NAT page
 		struct page *page = get_current_nat_page(sbi, nid);
 
+	    /* 扫描NAT page中空闲的f2fs_nat_entry,
+	       将f2fs_nat_entry转换成free_nid结构，插入到f2fs_nm_info->free_nid_root和f2fs_nm_info->free_nid_list 
+	    */
 		scan_nat_page(sbi, page, nid);
 		f2fs_put_page(page, 1);
 
@@ -1660,6 +1692,7 @@ static void build_free_nids(struct f2fs_sb_info *sbi)
 	nm_i->next_scan_nid = nid;
 
 	/* find free nids from current sum_pages */
+	/* 从f2fs_journal查找空闲的f2fs_nat_entry，插入到空闲nid链表中（f2fs_nm_info->free_nid_root和f2fs_nm_info->free_nid_list ） */
 	down_read(&curseg->journal_rwsem);
 	for (i = 0; i < nats_in_cursum(journal); i++) {
 		block_t addr;

@@ -50,7 +50,7 @@ repeat:
 static struct page *__get_meta_page(struct f2fs_sb_info *sbi, pgoff_t index,
 							bool is_meta)
 {
-	struct address_space *mapping = META_MAPPING(sbi);
+	struct address_space *mapping = META_MAPPING(sbi);  //meta_inode的address_space
 	struct page *page;
 	struct f2fs_io_info fio = {
 		.sbi = sbi,
@@ -64,8 +64,8 @@ static struct page *__get_meta_page(struct f2fs_sb_info *sbi, pgoff_t index,
 	if (unlikely(!is_meta))
 		fio.rw &= ~REQ_META;
 repeat:
-	/* grab_cache_page去获取特定位置的页，grab_cache_page首先会查找address_space的基数树，
-	如果找到该页则返回，如果找不到，则从伙伴系统分配一个新的页 */
+	/* grab_cache_page去获取特定位置的页，grab_cache_page首先会查找address_space的radix tree，
+	如果找到该页则返回，如果找不到，则从伙伴系统分配一个新的page */
 	page = grab_cache_page(mapping, index);
 	if (!page) {
 		cond_resched();
@@ -76,6 +76,7 @@ repeat:
 
 	fio.page = page;
 
+	/* 提交bio，进行读操作 */
 	if (f2fs_submit_page_bio(&fio)) {
 		f2fs_put_page(page, 1);
 		goto repeat;
@@ -98,6 +99,10 @@ out:
 	return page;
 }
 
+/* 
+   获得meta_inode中偏移地址为index的页（所有元数据作为同一个inode看待，即meta_inode）
+   index：逻辑块号
+*/
 struct page *get_meta_page(struct f2fs_sb_info *sbi, pgoff_t index)
 {
 	return __get_meta_page(sbi, index, true);
@@ -141,6 +146,7 @@ bool is_valid_blkaddr(struct f2fs_sb_info *sbi, block_t blkaddr, int type)
 }
 
 /*
+ 	预读元数据page
  * Readahead CP/NAT/SIT/SSA pages
  */
 int ra_meta_pages(struct f2fs_sb_info *sbi, block_t start, int nrpages,
