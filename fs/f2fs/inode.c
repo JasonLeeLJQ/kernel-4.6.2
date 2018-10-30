@@ -339,6 +339,7 @@ int f2fs_write_inode(struct inode *inode, struct writeback_control *wbc)
 }
 
 /*
+	在destroy inode之前，该函数清除与inode相关的结构	
  * Called at the last iput() if i_nlink is zero
  */
 void f2fs_evict_inode(struct inode *inode)
@@ -353,6 +354,8 @@ void f2fs_evict_inode(struct inode *inode)
 		drop_inmem_pages(inode);
 
 	trace_f2fs_evict_inode(inode);
+
+	/* 在删除inode之前，释放page cache中的所有页 */
 	truncate_inode_pages_final(&inode->i_data);
 
 	if (inode->i_ino == F2FS_NODE_INO(sbi) ||
@@ -360,6 +363,8 @@ void f2fs_evict_inode(struct inode *inode)
 		goto out_clear;
 
 	f2fs_bug_on(sbi, get_dirty_pages(inode));
+
+	/* 将inode从f2fs_inode_info->dirty_list中移除 */
 	remove_dirty_inode(inode);
 
 	f2fs_destroy_extent_tree(inode);
@@ -416,7 +421,7 @@ no_delete:
 	}
 out_clear:
 	fscrypt_put_encryption_info(inode, NULL);
-	clear_inode(inode);
+	clear_inode(inode);  //清除inode信息
 }
 
 /* caller should call f2fs_lock_op() */

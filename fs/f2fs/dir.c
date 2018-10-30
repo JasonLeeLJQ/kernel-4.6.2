@@ -15,6 +15,7 @@
 #include "acl.h"
 #include "xattr.h"
 
+/* 目录文件占据多少个block（page） */
 static unsigned long dir_blocks(struct inode *inode)
 {
 	return ((unsigned long long) (i_size_read(inode) + PAGE_SIZE - 1))
@@ -64,18 +65,25 @@ void set_de_type(struct f2fs_dir_entry *de, umode_t mode)
 	de->file_type = f2fs_type_by_mode[(mode & S_IFMT) >> S_SHIFT];
 }
 
+/* 
+	参数idx = le32_to_cpu(namehash) % nbucket：该目录文件的f2fs_dir_entry位于当前level下哪个bucket中 
+	本函数：得到目录项f2fs_dir_entry所在的bucket的索引块号（相对于文件起始位置的逻辑块号）
+*/
+
 static unsigned long dir_block_index(unsigned int level,
 				int dir_level, unsigned int idx)
 {
 	unsigned long i;
 	unsigned long bidx = 0;
 
+	/* 从level 0 遍历到 level -1，得到第idx个bucket的索引块号 */
 	for (i = 0; i < level; i++)
 		bidx += dir_buckets(i, dir_level) * bucket_blocks(i);
 	bidx += idx * bucket_blocks(level);
 	return bidx;
 }
 
+/* 查找dentry_page中的所有f2fs_dir_entry，返回该文件对应的f2fs_dir_entry结构 */
 static struct f2fs_dir_entry *find_in_block(struct page *dentry_page,
 				struct fscrypt_name *fname,
 				f2fs_hash_t namehash,
@@ -89,6 +97,7 @@ static struct f2fs_dir_entry *find_in_block(struct page *dentry_page,
 	dentry_blk = (struct f2fs_dentry_block *)kmap(dentry_page);
 
 	make_dentry_ptr(NULL, &d, (void *)dentry_blk, 1);
+	/* 在f2fs_dir_block查找该文件对应的f2fs_dir_entry结构 */
 	de = find_target_dentry(fname, namehash, max_slots, &d);
 	if (de)
 		*res_page = dentry_page;
@@ -103,6 +112,11 @@ static struct f2fs_dir_entry *find_in_block(struct page *dentry_page,
 	return de;
 }
 
+/* 在f2fs_dir_block中查找该文件对应的f2fs_dir_entry结构 
+	通过该文件的两个信息判断是否匹配：
+	1、文件名长度
+	2、文件名的哈希值
+*/
 struct f2fs_dir_entry *find_target_dentry(struct fscrypt_name *fname,
 			f2fs_hash_t namehash, int *max_slots,
 			struct f2fs_dentry_ptr *d)
@@ -155,6 +169,7 @@ found:
 	return de;
 }
 
+/* 在同一level的哈希表中，查找指定的目录项结构f2fs_dir_entry */
 static struct f2fs_dir_entry *find_in_level(struct inode *dir,
 					unsigned int level,
 					struct fscrypt_name *fname,
@@ -170,23 +185,34 @@ static struct f2fs_dir_entry *find_in_level(struct inode *dir,
 	int max_slots;
 	f2fs_hash_t namehash;
 
+	/* 对文件名哈希 */
 	namehash = f2fs_dentry_hash(&name);
 
+	/* 该level下，共有几个bucket */
 	nbucket = dir_buckets(level, F2FS_I(dir)->i_dir_level);
-	nblock = bucket_blocks(level);
+	nblock = bucket_blocks(level);  //该level下，每个bucket有几个block
 
+	/* 
+		参数le32_to_cpu(namehash) % nbucket：该目录文件的f2fs_dir_entry位于当前level下哪个bucket中 
+		本函数：得到目录项f2fs_dir_entry所在的bucket的索引块号（相对于文件起始位置的逻辑块号）
+	*/
 	bidx = dir_block_index(level, F2FS_I(dir)->i_dir_level,
 					le32_to_cpu(namehash) % nbucket);
 	end_block = bidx + nblock;
 
+	/* 遍历该bucket中的所有block */
 	for (; bidx < end_block; bidx++) {
 		/* no need to allocate new dentry pages to all the indices */
+		/*  首先在目录文件的inode的页缓存中查找是否存在该目录项页
+			若页缓存不存在，则读取磁盘中的目录项所在的block，读到dentry_page中
+		*/
 		dentry_page = find_data_page(dir, bidx);
 		if (IS_ERR(dentry_page)) {
 			room = true;
 			continue;
 		}
 
+		/* 查找dentry_page中的所有f2fs_dir_entry，返回该文件对应的f2fs_dir_entry结构 */
 		de = find_in_block(dentry_page, fname, namehash, &max_slots,
 								res_page);
 		if (de)
@@ -206,6 +232,7 @@ static struct f2fs_dir_entry *find_in_level(struct inode *dir,
 }
 
 /*
+	f2fs查找一个特定的f2fs_dir_entry
  * Find an entry in the specified directory with the wanted name.
  * It returns the page where the entry was found (as a parameter - res_page),
  * and the entry itself. Page is returned mapped and unlocked.
@@ -214,7 +241,7 @@ static struct f2fs_dir_entry *find_in_level(struct inode *dir,
 struct f2fs_dir_entry *f2fs_find_entry(struct inode *dir,
 			struct qstr *child, struct page **res_page)
 {
-	unsigned long npages = dir_blocks(dir);
+	unsigned long npages = dir_blocks(dir);  //目录文件占据多少个block（page）
 	struct f2fs_dir_entry *de = NULL;
 	unsigned int max_depth;
 	unsigned int level;
@@ -235,6 +262,7 @@ struct f2fs_dir_entry *f2fs_find_entry(struct inode *dir,
 	if (npages == 0)
 		goto out;
 
+	/* 目录文件在目录结构树的当前深度 */
 	max_depth = F2FS_I(dir)->i_current_depth;
 	if (unlikely(max_depth > MAX_DIR_HASH_DEPTH)) {
 		f2fs_msg(F2FS_I_SB(dir)->sb, KERN_WARNING,
@@ -245,6 +273,7 @@ struct f2fs_dir_entry *f2fs_find_entry(struct inode *dir,
 		mark_inode_dirty(dir);
 	}
 
+	/* 遍历每一个level，查找目录项 */
 	for (level = 0; level < max_depth; level++) {
 		de = find_in_level(dir, level, &fname, res_page);
 		if (de)
@@ -255,6 +284,7 @@ out:
 	return de;
 }
 
+/* 获得父目录的f2fs_dir_entry目录项 */
 struct f2fs_dir_entry *f2fs_parent_dir(struct inode *dir, struct page **p)
 {
 	struct page *page;

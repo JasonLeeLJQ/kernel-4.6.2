@@ -359,6 +359,7 @@ int f2fs_get_block(struct dnode_of_data *dn, pgoff_t index)
 	return f2fs_reserve_block(dn, index);
 }
 
+/* 读取磁盘文件偏移地址为index的block,读到内存页 */
 struct page *get_read_data_page(struct inode *inode, pgoff_t index,
 						int rw, bool for_write)
 {
@@ -377,6 +378,7 @@ struct page *get_read_data_page(struct inode *inode, pgoff_t index,
 	if (f2fs_encrypted_inode(inode) && S_ISREG(inode->i_mode))
 		return read_mapping_page(mapping, index, NULL);
 
+	/* 获得index对应的内存页 */
 	page = f2fs_grab_cache_page(mapping, index, for_write);
 	if (!page)
 		return ERR_PTR(-ENOMEM);
@@ -386,6 +388,7 @@ struct page *get_read_data_page(struct inode *inode, pgoff_t index,
 		goto got_it;
 	}
 
+	/* 设置dnode，主要是得到dn->data_blkaddr（index对应的实际物理块地址） */
 	set_new_dnode(&dn, inode, NULL, NULL, 0);
 	err = get_dnode_of_data(&dn, index, LOOKUP_NODE);
 	if (err)
@@ -415,8 +418,10 @@ got_it:
 		return page;
 	}
 
+	/* 设置fio的地址 */
 	fio.new_blkaddr = fio.old_blkaddr = dn.data_blkaddr;
 	fio.page = page;
+	/* 提交bio操作 */
 	err = f2fs_submit_page_bio(&fio);
 	if (err)
 		goto put_err;
@@ -427,6 +432,10 @@ put_err:
 	return ERR_PTR(err);
 }
 
+/*  查找data page
+	1、首先在inode的页缓存中查找偏移地址为index的page
+	2、若页缓存不存在，则读取磁盘文件偏移地址为index的block，读到内存页里
+*/
 struct page *find_data_page(struct inode *inode, pgoff_t index)
 {
 	struct address_space *mapping = inode->i_mapping;
@@ -437,6 +446,7 @@ struct page *find_data_page(struct inode *inode, pgoff_t index)
 		return page;
 	f2fs_put_page(page, 0);
 
+	/* 读取磁盘文件偏移地址为index的block，读到page中 */
 	page = get_read_data_page(inode, index, READ_SYNC, false);
 	if (IS_ERR(page))
 		return page;

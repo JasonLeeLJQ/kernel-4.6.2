@@ -146,7 +146,7 @@ bool is_valid_blkaddr(struct f2fs_sb_info *sbi, block_t blkaddr, int type)
 }
 
 /*
- 	预读元数据page
+ 	预读元数据page，返回预读页的数目
  * Readahead CP/NAT/SIT/SSA pages
  */
 int ra_meta_pages(struct f2fs_sb_info *sbi, block_t start, int nrpages,
@@ -166,6 +166,8 @@ int ra_meta_pages(struct f2fs_sb_info *sbi, block_t start, int nrpages,
 		fio.rw &= ~REQ_META;
 
 	blk_start_plug(&plug);
+
+	/* 预读nrpages个元数据页 */
 	for (; nrpages-- > 0; blkno++) {
 
 		if (!is_valid_blkaddr(sbi, blkno, type))
@@ -204,6 +206,7 @@ int ra_meta_pages(struct f2fs_sb_info *sbi, block_t start, int nrpages,
 
 		fio.page = page;
 		fio.old_blkaddr = fio.new_blkaddr;
+		/* 提交bio请求 */
 		f2fs_submit_page_mbio(&fio);
 		f2fs_put_page(page, 0);
 	}

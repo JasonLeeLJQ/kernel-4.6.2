@@ -208,15 +208,24 @@ static inline pgoff_t current_nat_addr(struct f2fs_sb_info *sbi, nid_t start)
 	return block_addr;
 }
 
+/* 
+	-------------- ---------------
+   | segment#N    | segment#N副本 |
+    -------------- ---------------
+	NAT区域中，对于一个segment，有一个完全相同的segment作为副本，与前一个segment相邻
+	如果block_addr位于第一个segment中，则该函数获得的是另一个segment副本中地址（偏移量完全相同）
+*/
 static inline pgoff_t next_nat_addr(struct f2fs_sb_info *sbi,
 						pgoff_t block_addr)
 {
 	struct f2fs_nm_info *nm_i = NM_I(sbi);
 
 	block_addr -= nm_i->nat_blkaddr;
-	if ((block_addr >> sbi->log_blocks_per_seg) % 2)
+
+	/* block_addr >> sbi->log_blocks_per_seg：位于第几个segment（相对NAT区域开始） */
+	if ((block_addr >> sbi->log_blocks_per_seg) % 2)  //block_addr位于第二个segment中，block_addr要转换成第一个segment的地址
 		block_addr -= sbi->blocks_per_seg;
-	else
+	else  //block_addr位于第一个segment，block_addr要转换成第二个segment的地址
 		block_addr += sbi->blocks_per_seg;
 
 	return block_addr + nm_i->nat_blkaddr;
@@ -351,6 +360,7 @@ static inline int set_nid(struct page *p, int off, nid_t nid, bool i)
 	return set_page_dirty(p);
 }
 
+/* 根据偏移off获得node id */
 static inline nid_t get_nid(struct page *p, int off, bool i)
 {
 	struct f2fs_node *rn = F2FS_NODE(p);

@@ -749,6 +749,7 @@ void lock_two_nondirectories(struct inode *, struct inode*);
 void unlock_two_nondirectories(struct inode *, struct inode*);
 
 /*
+ 返回inode->i_size,文件的字节数
  * NOTE: in a 32bit arch with a preemptable kernel and
  * an UP compile the i_size_read/write must be atomic
  * with respect to the local cpu (unlike with preempt disabled),

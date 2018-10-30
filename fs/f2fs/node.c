@@ -108,6 +108,14 @@ static struct page *get_current_nat_page(struct f2fs_sb_info *sbi, nid_t nid)
 	return get_meta_page(sbi, index);
 }
 
+/* 
+	-------------- ---------------
+   | segment#N    | segment#N副本 |
+    -------------- ---------------
+	NAT区域中，对于一个segment，有一个完全相同的segment作为副本，与前一个segment相邻
+	如果nid位于第一个segment中的某个page，
+	则该函数获得的是另一个segment副本中偏移地址完全相同的page
+*/
 static struct page *get_next_nat_page(struct f2fs_sb_info *sbi, nid_t nid)
 {
 	struct page *src_page;
@@ -327,7 +335,9 @@ static void set_node_addr(struct f2fs_sb_info *sbi, struct node_info *ni,
 			nm_i->next_scan_nid = ni->nid;
 	}
 
-	/* change address */
+	/* change address 
+		更改nat cache中nat entry的地址，并没有直接修改NAT表
+	*/
 	nat_set_blkaddr(e, new_blkaddr);
 	if (new_blkaddr == NEW_ADDR || new_blkaddr == NULL_ADDR)
 		set_nat_flag(e, IS_CHECKPOINTED, false);
@@ -458,27 +468,31 @@ pgoff_t get_next_page_offset(struct dnode_of_data *dn, pgoff_t pgofs)
 }
 
 /*
+ * @block：逻辑块号（相对于文件起始位置）
  * The maximum depth is four.
  * Offset[0] will have raw inode offset.
  */
+ //计算并返回block数据块使用了几级索引
 static int get_node_path(struct inode *inode, long block,
 				int offset[4], unsigned int noffset[4])
 {
-	const long direct_index = ADDRS_PER_INODE(inode);
-	const long direct_blks = ADDRS_PER_BLOCK;
+	const long direct_index = ADDRS_PER_INODE(inode);  //923
+	const long direct_blks = ADDRS_PER_BLOCK;  //1018
 	const long dptrs_per_blk = NIDS_PER_BLOCK;
-	const long indirect_blks = ADDRS_PER_BLOCK * NIDS_PER_BLOCK;
-	const long dindirect_blks = indirect_blks * NIDS_PER_BLOCK;
+	const long indirect_blks = ADDRS_PER_BLOCK * NIDS_PER_BLOCK;  //1018*1018
+	const long dindirect_blks = indirect_blks * NIDS_PER_BLOCK;  //1018*1018*1018
 	int n = 0;
 	int level = 0;
 
 	noffset[0] = 0;
 
+	/* 第0级索引：block代表的逻辑块号位于 923个直接索引地址内 */
 	if (block < direct_index) {
 		offset[n] = block;
 		goto got;
 	}
 	block -= direct_index;
+	/* 第1级索引：block代表的逻辑块号位于 第一个直接索引块内 */
 	if (block < direct_blks) {
 		offset[n++] = NODE_DIR1_BLOCK;
 		noffset[n] = 1;
@@ -487,6 +501,7 @@ static int get_node_path(struct inode *inode, long block,
 		goto got;
 	}
 	block -= direct_blks;
+	/* 第1级索引：block代表的逻辑块号位于 第二个直接索引块内 */
 	if (block < direct_blks) {
 		offset[n++] = NODE_DIR2_BLOCK;
 		noffset[n] = 2;
@@ -495,6 +510,7 @@ static int get_node_path(struct inode *inode, long block,
 		goto got;
 	}
 	block -= direct_blks;
+	/* 第2级索引：block代表的逻辑块号位于 第一个间接索引块内 */
 	if (block < indirect_blks) {
 		offset[n++] = NODE_IND1_BLOCK;
 		noffset[n] = 3;
@@ -505,6 +521,7 @@ static int get_node_path(struct inode *inode, long block,
 		goto got;
 	}
 	block -= indirect_blks;
+	/* 第2级索引：block代表的逻辑块号位于 第二个间接索引块内 */
 	if (block < indirect_blks) {
 		offset[n++] = NODE_IND2_BLOCK;
 		noffset[n] = 4 + dptrs_per_blk;
@@ -515,6 +532,7 @@ static int get_node_path(struct inode *inode, long block,
 		goto got;
 	}
 	block -= indirect_blks;
+	/* 第3级索引：block代表的逻辑块号位于 二级间接索引块内 */
 	if (block < dindirect_blks) {
 		offset[n++] = NODE_DIND_BLOCK;
 		noffset[n] = 5 + (dptrs_per_blk * 2);
@@ -541,23 +559,28 @@ got:
  * f2fs_unlock_op() only if ro is not set RDONLY_NODE.
  * In the case of RDONLY_NODE, we don't need to care about mutex.
  */
+ /* @mode:（ALLOC_NODE/LOOKUP_NODE）如果dnode不存在，是否需要新建，ALLOC_NODE时需要新建
+ * 获取由index索引（在文件内的偏移）的数据块的直接节点信息，存储在dn中
+ 	该直接节点可能是一个inode或者一个direct node
+ */
 int get_dnode_of_data(struct dnode_of_data *dn, pgoff_t index, int mode)
 {
 	struct f2fs_sb_info *sbi = F2FS_I_SB(dn->inode);
-	struct page *npage[4];
-	struct page *parent = NULL;
-	int offset[4];
-	unsigned int noffset[4];
-	nid_t nids[4];
-	int level, i = 0;
+	struct page *npage[4];  //每一级索引node page
+	struct page *parent = NULL;  //指向上一级索引page
+	int offset[4];  //数据块索引时在每一级索引块中的偏移
+	unsigned int noffset[4];  //每一个索引块在文件所有索引块中的偏移
+	nid_t nids[4];  //每一级索引的node id
+	int level, i = 0; //索引等级（共4级，0-3）；
 	int err = 0;
 
+	//计算并返回block数据块使用了几级索引
 	level = get_node_path(dn->inode, index, offset, noffset);
 
 	nids[0] = dn->inode->i_ino;
 	npage[0] = dn->inode_page;
 
-	if (!npage[0]) {
+	if (!npage[0]) {  //如果inode page不存在，则获取
 		npage[0] = get_node_page(sbi, nids[0]);
 		if (IS_ERR(npage[0]))
 			return PTR_ERR(npage[0]);
@@ -588,7 +611,8 @@ int get_dnode_of_data(struct dnode_of_data *dn, pgoff_t index, int mode)
 			}
 
 			dn->nid = nids[i];
-			npage[i] = new_node_page(dn, noffset[i], NULL);
+			npage[i] = new_node_page(dn, noffset[i], NULL); //新建一个node page
+			if (IS_ERR(npage[i])) {
 			if (IS_ERR(npage[i])) {
 				alloc_nid_failed(sbi, nids[i]);
 				err = PTR_ERR(npage[i]);
@@ -599,6 +623,7 @@ int get_dnode_of_data(struct dnode_of_data *dn, pgoff_t index, int mode)
 			alloc_nid_done(sbi, nids[i]);
 			done = true;
 		} else if (mode == LOOKUP_NODE_RA && i == level && level > 1) {
+			//使用了多级索引，并且已经到了最后一级：根据mode标志进行页面的预读
 			npage[i] = get_node_page_ra(parent, offset[i - 1]);
 			if (IS_ERR(npage[i])) {
 				err = PTR_ERR(npage[i]);
@@ -614,6 +639,7 @@ int get_dnode_of_data(struct dnode_of_data *dn, pgoff_t index, int mode)
 		}
 
 		if (!done) {
+			//根据nid读取每个间接node的page
 			npage[i] = get_node_page(sbi, nids[i]);
 			if (IS_ERR(npage[i])) {
 				err = PTR_ERR(npage[i]);
@@ -623,12 +649,15 @@ int get_dnode_of_data(struct dnode_of_data *dn, pgoff_t index, int mode)
 		}
 		if (i < level) {
 			parent = npage[i];
+			//为下一级间接节点获取node id
 			nids[i + 1] = get_nid(parent, offset[i], false);
 		}
 	}
+	//设置数据的直接节点相关信息
 	dn->nid = nids[level];
 	dn->ofs_in_node = offset[level];
 	dn->node_page = npage[level];
+	//获取数据块地址
 	dn->data_blkaddr = datablock_addr(dn->node_page, dn->ofs_in_node);
 	return 0;
 
@@ -1006,6 +1035,7 @@ struct page *new_inode_page(struct inode *inode)
 	return new_node_page(&dn, 0, NULL);
 }
 
+/* 新建一个node page */
 struct page *new_node_page(struct dnode_of_data *dn,
 				unsigned int ofs, struct page *ipage)
 {
@@ -1450,7 +1480,7 @@ static int f2fs_write_node_page(struct page *page,
 		down_read(&sbi->node_write);
 	}
 
-	/* 得到node_info */
+	/* 读NAT表 */
 	get_node_info(sbi, nid, &ni);
 
 	/* This page is already truncated */
@@ -1712,6 +1742,8 @@ static void build_free_nids(struct f2fs_sb_info *sbi)
 }
 
 /*
+	alloc_nid 函数会从 free_nid_list 链表中选出一个free_nid出来
+	申请一个新的空闲的nid号，并返回
  * If this function returns success, caller can obtain a new nid
  * from second parameter of this function.
  * The returned nid could be used ino as well as nid when inode is created.
@@ -1742,7 +1774,9 @@ retry:
 	}
 	spin_unlock(&nm_i->free_nid_list_lock);
 
-	/* Let's scan nat pages and its caches to get free nids */
+	/* 
+	如果free_nid链表中没有free_nid，则建立free_nid结构（扫描磁盘NAT表）
+	Let's scan nat pages and its caches to get free nids */
 	mutex_lock(&nm_i->build_lock);
 	build_free_nids(sbi);
 	mutex_unlock(&nm_i->build_lock);
@@ -1758,12 +1792,12 @@ void alloc_nid_done(struct f2fs_sb_info *sbi, nid_t nid)
 	struct free_nid *i;
 
 	spin_lock(&nm_i->free_nid_list_lock);
-	i = __lookup_free_nid_list(nm_i, nid);
+	i = __lookup_free_nid_list(nm_i, nid);  
 	f2fs_bug_on(sbi, !i || i->state != NID_ALLOC);
-	__del_from_free_nid_list(nm_i, i);
+	__del_from_free_nid_list(nm_i, i);  //从基数树和链表中删除这个节点
 	spin_unlock(&nm_i->free_nid_list_lock);
 
-	kmem_cache_free(free_nid_slab, i);
+	kmem_cache_free(free_nid_slab, i);  //释放free_nid slab对象
 }
 
 /*
@@ -2008,6 +2042,7 @@ add_out:
 	list_add_tail(&nes->set_list, head);
 }
 
+/* 将nat entry set中的dirty nat entry刷回 */
 static void __flush_nat_entry_set(struct f2fs_sb_info *sbi,
 					struct nat_entry_set *set)
 {
@@ -2072,8 +2107,8 @@ static void __flush_nat_entry_set(struct f2fs_sb_info *sbi,
 }
 
 /*
-	checkpoint过程中，将journal中的nat entry刷回磁盘；
-	其实，先将journal中的nat entry移动nat entry set中，最后从nat entry set中将
+	checkpoint过程中，将journal中的f2fs_nat_entry刷回磁盘；
+	其实，先将journal中的f2fs_nat_entry移动nat_entry_set中，最后从nat_entry_set中将dirty nat entry刷回磁盘
  * This function is called during the checkpointing process.
  */
 void flush_nat_entries(struct f2fs_sb_info *sbi)

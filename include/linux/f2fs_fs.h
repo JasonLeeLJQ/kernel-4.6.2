@@ -34,7 +34,7 @@
 */
 #define F2FS_RESERVED_NODE_NUM		3
 
-#define F2FS_ROOT_INO(sbi)	(sbi->root_ino_num)   //0
+#define F2FS_ROOT_INO(sbi)	(sbi->root_ino_num)   //3
 #define F2FS_NODE_INO(sbi)	(sbi->node_ino_num)   //1
 #define F2FS_META_INO(sbi)	(sbi->meta_ino_num)   //2
 
@@ -236,23 +236,23 @@ struct f2fs_inode {
 
 	struct f2fs_extent i_ext;	/* caching a largest extent */
 
-	__le32 i_addr[DEF_ADDRS_PER_INODE];	/* Pointers to data blocks 直接指向data block，一共923个指针*/
+	__le32 i_addr[DEF_ADDRS_PER_INODE];	/* Pointers to data blocks 直接指向data block(其实是逻辑块号)，一共923个指针*/
 
 	__le32 i_nid[DEF_NIDS_PER_INODE];	/* direct(2), indirect(2),
 						double_indirect(1) node id 
-						两个一级索引块(直接 node )指针，
-						两个二级索引块(间接 node )指针，
-						以及一个三级索引块(二级间接 node)指针*/
+						两个一级索引块(直接 node )的node id，
+						两个二级索引块(间接 node )的node id，
+						以及一个三级索引块(二级间接 node)的node id*/
 } __packed;
 
-/* 直接node */
+/* 直接node：直接指向数据块 */
 struct direct_node {
-	__le32 addr[ADDRS_PER_BLOCK];	/* array of data block address =1018个指向inode的指针*/
+	__le32 addr[ADDRS_PER_BLOCK];	/* array of data block address =1018个数据块的逻辑块号*/
 } __packed;
 
 /* 间接node */
 struct indirect_node {
-	__le32 nid[NIDS_PER_BLOCK];	/* array of data block address =1018个指向直接node的指针*/
+	__le32 nid[NIDS_PER_BLOCK];	/* array of data block address =1018个直接node的node id*/
 } __packed;
 
 enum {

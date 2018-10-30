@@ -1869,8 +1869,12 @@ static struct page *get_current_sit_page(struct f2fs_sb_info *sbi,
 	return get_meta_page(sbi, current_sit_addr(sbi, segno));
 }
 
+
 /*
-	f2fs有两个SIT（NAT）区域，一个是当前最新的数据，一个是当前checkpoint有效的数据，
+	 -------------- ---------------
+    |      SIT	  |     SIT副本      |
+     -------------- ---------------
+	f2fs有两个SIT区域，一个是当前最新的SIT区域，一个是当前checkpoint有效的SIT区域。（与NAT区域副本布局不同）
 	get_next_sit_page把更新的数据写在了最新的那个区域，并返回这个page。
 	checkpoint完成后，最新区域成了checkpoint有效区域，而checkpoint有效区域成了更新的数据写入的区域。
 */
@@ -1897,7 +1901,7 @@ static struct page *get_next_sit_page(struct f2fs_sb_info *sbi,
 	set_page_dirty(dst_page);
 	f2fs_put_page(src_page, 1);
 
-	set_to_next_sit(sit_i, start);
+	set_to_next_sit(sit_i, start);  //修改位图
 
 	return dst_page;
 }
@@ -2045,7 +2049,7 @@ void flush_sit_entries(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 			down_write(&curseg->journal_rwsem);
 		} else {
 			/*
-				f2fs有两个SIT（NAT）区域，一个是当前最新的数据，一个是当前checkpoint有效的数据，
+				f2fs有两个SIT区域，一个是当前最新的数据，一个是当前checkpoint有效的数据，
 				get_next_sit_page把更新的数据写在了最新的那个区域，并返回这个page。
 				checkpoint完成后，最新区域成了checkpoint有效区域，而checkpoint有效区域成了更新的数据写入的区域。
 			*/
@@ -2132,6 +2136,7 @@ static int build_sit_info(struct f2fs_sb_info *sbi)
 
 	SM_I(sbi)->sit_info = sit_i;
 
+	/* 建立seg_entry cache,申请固定大小的空间，缓存SIT区域全部的sit_entry */
 	sit_i->sentries = f2fs_kvzalloc(MAIN_SEGS(sbi) *
 					sizeof(struct seg_entry), GFP_KERNEL);
 	if (!sit_i->sentries)
@@ -2261,7 +2266,7 @@ static int build_curseg(struct f2fs_sb_info *sbi)
 	return restore_curseg_summaries(sbi);
 }
 
-/* 读取磁盘SIT区域，获得f2fs_sit_entry对象来建立sit_entry结构 */
+/* 读取全部磁盘SIT区域，获得f2fs_sit_entry对象来建立seg_entry结构 */
 static void build_sit_entries(struct f2fs_sb_info *sbi)
 {
 	struct sit_info *sit_i = SIT_I(sbi);
@@ -2272,6 +2277,7 @@ static void build_sit_entries(struct f2fs_sb_info *sbi)
 	unsigned int readed, start_blk = 0;
 	int nrpages = MAX_BIO_BLOCKS(sbi) * 8;
 
+	/* 读取全部SIT区域 */
 	do {
 		/* 预读SIT区域元数据页，返回预读的总页数readed */
 		readed = ra_meta_pages(sbi, start_blk, nrpages, META_SIT, true);
@@ -2300,7 +2306,7 @@ static void build_sit_entries(struct f2fs_sb_info *sbi)
 
 			/* 
 			   如果journal中不存在，在查找meta_inode的address_space是否存在对应的page。
-			   如果还不存在，则读取磁盘SIT区域，获取start对应的sit entry所在的page 
+			   如果还不存在，则读取磁盘SIT区域，获取start对应的f2fs_sit_entry所在的page 
 			*/
 			page = get_current_sit_page(sbi, start);
 			sit_blk = (struct f2fs_sit_block *)page_address(page);
@@ -2379,6 +2385,7 @@ static int init_victim_secmap(struct f2fs_sb_info *sbi)
 	return 0;
 }
 
+/* 建立 dirty segment链表和每个脏segment的位图 */
 static int build_dirty_segmap(struct f2fs_sb_info *sbi)
 {
 	struct dirty_seglist_info *dirty_i;
@@ -2392,7 +2399,7 @@ static int build_dirty_segmap(struct f2fs_sb_info *sbi)
 	SM_I(sbi)->dirty_info = dirty_i;
 	mutex_init(&dirty_i->seglist_lock);
 
-	bitmap_size = f2fs_bitmap_size(MAIN_SEGS(sbi));
+	bitmap_size = f2fs_bitmap_size(MAIN_SEGS(sbi));  //位图大小
 
 	for (i = 0; i < NR_DIRTY_TYPE; i++) {
 		dirty_i->dirty_segmap[i] = f2fs_kvzalloc(bitmap_size, GFP_KERNEL);

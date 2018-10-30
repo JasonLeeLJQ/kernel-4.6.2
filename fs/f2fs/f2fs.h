@@ -490,7 +490,7 @@ struct f2fs_nm_info {
 };
 
 /*
-	data block的direct node
+	data block的直接节点信息（直接节点直接指向数据块，因此，它可能是inode或者direct node）
  * this structure is used as one of function parameters.
  * all the information are dedicated to a given direct node block determined
  * by the data offset in a file.
@@ -765,7 +765,7 @@ struct f2fs_sb_info {
 	unsigned int log_sectors_per_block;	/* log2 sectors per block */
 	unsigned int log_blocksize;		/* log2 block size */
 	unsigned int blocksize;			/* block size */
-	unsigned int root_ino_num;		/* root inode number 根目录节点号=0*/
+	unsigned int root_ino_num;		/* root inode number 根目录节点号=3*/
 	unsigned int node_ino_num;		/* node inode number =1*/
 	unsigned int meta_ino_num;		/* meta inode number =2 元数据的节点号（将所有元数据区域看做同一个文件，对应着同一个inode）*/
 	unsigned int log_blocks_per_seg;	/* log2 blocks per segment */
